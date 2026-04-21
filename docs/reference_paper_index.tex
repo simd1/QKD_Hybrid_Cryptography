@@ -1,0 +1,53 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[hidelinks]{hyperref}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{booktabs}
+
+\title{Reference Paper Index\\Hybrid BB84 + AES-256-GCM Project}
+\author{Cybersecurity Lab Project}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section*{Purpose}
+This document is the separate reference-paper submission index for the Hybrid BB84 + AES-256-GCM project. The downloaded reference PDFs are stored individually in the project folder \texttt{docs/reference\_papers/}. The project report cites these sources where the BB84 protocol, QBER-based eavesdropper detection, privacy amplification, AES-256, GCM authenticated encryption, and post-quantum comparison are discussed.
+
+\section*{Reference Papers and Standards Included}
+\begin{longtable}{p{0.24\linewidth}p{0.32\linewidth}p{0.34\linewidth}}
+\toprule
+\textbf{Local File} & \textbf{Citation} & \textbf{Use in Project Report} \\
+\midrule
+\endhead
+\texttt{bb84\_original\_reprint\_arxiv\_2003\_06557.pdf} &
+Bennett and Brassard, ``Quantum Cryptography: Public Key Distribution and Coin Tossing,'' 1984. &
+Foundation of the BB84 protocol: random bits, random conjugate bases, basis reconciliation, sifting, and eavesdropper disturbance. \\
+\addlinespace
+\texttt{nist\_fips\_197\_aes.pdf} &
+NIST FIPS 197, \emph{Advanced Encryption Standard (AES)}, updated 2023. &
+Defines AES as the classical symmetric cipher used after the BB84-derived key is produced. \\
+\addlinespace
+\texttt{nist\_sp\_800\_38d\_gcm.pdf} &
+NIST SP 800-38D, \emph{Recommendation for Galois/Counter Mode (GCM) and GMAC}, 2007. &
+Justifies AES-GCM for confidentiality plus authentication and tamper detection. \\
+\addlinespace
+\texttt{nist\_fips\_203\_ml\_kem.pdf} &
+NIST FIPS 203, \emph{Module-Lattice-Based Key-Encapsulation Mechanism Standard}, 2024. &
+Used in the future-work and comparison sections to distinguish QKD from deployable post-quantum key encapsulation. \\
+\addlinespace
+\texttt{shor\_quantum\_factoring\_discrete\_log.pdf} &
+Shor, ``Polynomial-Time Algorithms for Prime Factorization and Discrete Logarithms on a Quantum Computer,'' 1997. &
+Explains why classical public-key key exchange based on factoring or discrete logarithms motivates quantum-safe alternatives. \\
+\bottomrule
+\end{longtable}
+
+\section*{Additional Cited Research}
+The project report also cites Bennett et al.'s experimental quantum cryptography paper, Bennett et al.'s generalized privacy amplification paper, and Scarani et al.'s practical QKD security review. These are listed in \texttt{docs/references.bib} with DOI metadata and are cited in the report bibliography.
+
+\section*{Submission Note}
+For submission, upload this index together with the PDF files in \texttt{docs/reference\_papers/}. Upload the main project report separately from \texttt{docs/project\_report.tex} or its compiled PDF version.
+
+\end{document}
+
