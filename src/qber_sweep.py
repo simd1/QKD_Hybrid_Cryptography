@@ -9,7 +9,7 @@ from bb84_pipeline import QBER_THRESHOLD, run_bb84
 
 
 def sweep_qber(
-    n_qubits: int = 8192,
+    n_qubits: int = 2048,
     trials: int = 5,
     output_path: Path | None = None,
 ) -> Path:
@@ -68,4 +68,3 @@ def sweep_qber(
 if __name__ == "__main__":
     path = sweep_qber()
     print(f"Wrote QBER sweep results to {path}")
-

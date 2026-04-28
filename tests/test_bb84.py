@@ -10,97 +10,69 @@ from cryptography.exceptions import InvalidTag
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from aes_cipher import AESCipher
-from alice import Alice
 from bb84_pipeline import run_bb84
-from bob import Bob
-from channel import QuantumChannel
-from hybrid_encrypt import hybrid_decrypt, hybrid_encrypt
+from e91_pipeline import run_e91
+from hybrid_encrypt import compare_protocols, hybrid_decrypt, hybrid_encrypt, hybrid_encrypt_e91
 from privacy_amplification import bits_to_bytes, privacy_amplification
+from quantum_utils import (
+    E91Angles,
+    measure_qubit_at_angle,
+    measure_single_qubit_in_basis,
+    prepare_bb84_state,
+    prepare_bell_state,
+)
 from reconciliation import cascade_reconciliation, estimate_qber
 
 
-class TestAlice:
-    def test_generates_correct_shape(self) -> None:
-        alice = Alice(500)
-        alice.generate_bits_and_bases()
-        assert alice.bits.shape == (500,)
-        assert alice.bases.shape == (500,)
+class TestQiskitHelpers:
+    def test_bb84_preparation_and_measurement(self) -> None:
+        state = prepare_bb84_state(bit=1, basis=0)
+        bit, _ = measure_single_qubit_in_basis(state, basis=0)
+        assert bit == 1
 
-    def test_bits_and_bases_are_binary(self) -> None:
-        alice = Alice(500)
-        alice.generate_bits_and_bases()
-        assert set(alice.bits).issubset({0, 1})
-        assert set(alice.bases).issubset({0, 1})
+    def test_bell_pair_has_perfect_z_correlation(self) -> None:
+        state = prepare_bell_state()
+        alice_bit, state = measure_qubit_at_angle(state, 0, 0.0)
+        bob_bit, _ = measure_qubit_at_angle(state, 1, 0.0)
+        assert alice_bit == bob_bit
 
-    def test_qubit_encoding(self) -> None:
-        alice = Alice(1000)
-        alice.generate_bits_and_bases()
-        qubits = alice.encode_qubits()
-        assert qubits.shape == (1000,)
-        assert set(qubits).issubset({0, 1, 2, 3})
+    def test_e91_angles_are_expected(self) -> None:
+        angles = E91Angles()
+        assert angles.key == 0.0
+        assert angles.a1 > angles.a0
 
 
-class TestBB84Clean:
-    def test_sifted_keys_match_on_clean_channel(self) -> None:
-        n = 2000
-        alice = Alice(n)
-        alice.generate_bits_and_bases()
-        qubits = alice.encode_qubits()
-
-        channel = QuantumChannel(eve_present=False)
-        received = channel.transmit(qubits)
-
-        bob = Bob(n)
-        bob.choose_bases()
-        bob.measure(received)
-
-        alice_sifted = alice.sift_key(bob.get_bases())
-        bob_sifted = bob.sift_key(alice.get_bases())
-
-        assert len(alice_sifted) == len(bob_sifted)
-        assert np.mean(alice_sifted != bob_sifted) == 0.0
-
-    def test_sifted_length_approximately_half(self) -> None:
-        n = 4000
-        alice = Alice(n)
-        alice.generate_bits_and_bases()
-        qubits = alice.encode_qubits()
-
-        bob = Bob(n)
-        bob.choose_bases()
-        bob.measure(QuantumChannel().transmit(qubits))
-
-        ratio = len(alice.sift_key(bob.get_bases())) / n
-        assert 0.40 < ratio < 0.60
-
+class TestBB84Pipeline:
     def test_run_bb84_returns_32_byte_key(self) -> None:
-        key = run_bb84(n_qubits=4096, eve_present=False, verbose=False)
+        key = run_bb84(n_qubits=1024, eve_present=False, verbose=False)
         assert isinstance(key, bytes)
         assert len(key) == 32
 
+    def test_bb84_clean_channel_metrics(self) -> None:
+        key, metrics = run_bb84(n_qubits=1024, eve_present=False, verbose=False, return_metrics=True)
+        assert key is not None
+        assert metrics["qber"] == 0.0
+        assert 0.40 < metrics["sifted_ratio"] < 0.60
 
-class TestEavesdropping:
-    def test_eve_raises_qber(self) -> None:
-        n = 4000
-        alice = Alice(n)
-        alice.generate_bits_and_bases()
-        qubits = alice.encode_qubits()
+    def test_bb84_aborts_with_full_eavesdropping(self) -> None:
+        result = run_bb84(n_qubits=1024, eve_present=True, intercept_rate=1.0, verbose=False)
+        assert result is None
 
-        channel = QuantumChannel(eve_present=True, intercept_rate=1.0)
-        received = channel.transmit(qubits)
 
-        bob = Bob(n)
-        bob.choose_bases()
-        bob.measure(received)
+class TestE91Pipeline:
+    def test_run_e91_returns_32_byte_key(self) -> None:
+        key = run_e91(n_pairs=4096, eve_present=False, verbose=False)
+        assert isinstance(key, bytes)
+        assert len(key) == 32
 
-        alice_sifted = alice.sift_key(bob.get_bases())
-        bob_sifted = bob.sift_key(alice.get_bases())
+    def test_e91_clean_channel_metrics(self) -> None:
+        key, metrics = run_e91(n_pairs=4096, eve_present=False, verbose=False, return_metrics=True)
+        assert key is not None
+        assert metrics["qber"] == 0.0
+        assert metrics["chsh_s"] > 2.2
 
-        qber, _, _ = estimate_qber(alice_sifted, bob_sifted, sample_fraction=0.2)
-        assert qber > 0.11
-
-    def test_pipeline_aborts_when_eve_intercepts_everything(self) -> None:
-        result = run_bb84(n_qubits=4096, eve_present=True, intercept_rate=1.0, verbose=False)
+    def test_e91_aborts_with_full_eavesdropping(self) -> None:
+        result = run_e91(n_pairs=4096, eve_present=True, intercept_rate=1.0, verbose=False)
         assert result is None
 
 
@@ -160,9 +132,20 @@ class TestPrivacyAmplification:
 
 
 class TestHybridEncryption:
-    def test_hybrid_encrypt_decrypt_roundtrip(self) -> None:
-        message = "BB84 generated this AES key."
-        result = hybrid_encrypt(message, n_qubits=4096, eve_present=False, verbose=False)
+    def test_hybrid_bb84_encrypt_decrypt_roundtrip(self) -> None:
+        message = "BB84 generated this AES key through Qiskit."
+        result = hybrid_encrypt(message, n_qubits=1024, eve_present=False, verbose=False)
         assert result is not None
         assert hybrid_decrypt(**result, verbose=False) == message
 
+    def test_hybrid_e91_encrypt_decrypt_roundtrip(self) -> None:
+        message = "E91 generated this AES key through Qiskit."
+        result = hybrid_encrypt_e91(message, n_pairs=4096, eve_present=False, verbose=False)
+        assert result is not None
+        assert hybrid_decrypt(**result, verbose=False) == message
+
+    def test_compare_protocols_reports_both_flows(self) -> None:
+        result = compare_protocols("protocol compare", bb84_qubits=1024, e91_pairs=4096)
+        assert result["bb84_aes"]["success"] is True
+        assert result["e91_aes"]["success"] is True
+        assert result["comparison"]["shared_aes_mode"] == "AES-256-GCM"

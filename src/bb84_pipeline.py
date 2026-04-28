@@ -1,13 +1,11 @@
-"""Full BB84 key distribution pipeline."""
+"""Qiskit-based BB84 key distribution pipeline."""
 
 from __future__ import annotations
 
 import numpy as np
 
-from alice import Alice
-from bob import Bob
-from channel import QuantumChannel
 from privacy_amplification import privacy_amplification
+from quantum_utils import make_rng, measure_single_qubit_in_basis, prepare_bb84_state
 from reconciliation import cascade_reconciliation, estimate_qber
 
 QBER_THRESHOLD = 0.11
@@ -21,15 +19,17 @@ def run_bb84(
     verbose: bool = True,
     return_metrics: bool = False,
 ) -> bytes | None | tuple[bytes | None, dict[str, float | int | bool | str]]:
-    """Run BB84 and return a symmetric key, or None if QBER aborts."""
+    """Run Qiskit-based BB84 and return a symmetric key, or None if QBER aborts."""
     if n_qubits <= 0:
         raise ValueError("n_qubits must be positive")
     if key_bits <= 0 or key_bits % 8 != 0:
         raise ValueError("key_bits must be a positive multiple of 8")
+    if not 0.0 <= intercept_rate <= 1.0:
+        raise ValueError("intercept_rate must be between 0.0 and 1.0")
 
     if verbose:
         print("\n" + "=" * 60)
-        print(f"BB84 key distribution: {n_qubits} qubits")
+        print(f"Qiskit BB84 key distribution: {n_qubits} qubits")
         print(f"Eve present: {eve_present}", end="")
         if eve_present:
             print(f" (intercept rate: {intercept_rate:.0%})")
@@ -37,25 +37,35 @@ def run_bb84(
             print()
         print("=" * 60)
 
-    alice = Alice(n_qubits)
-    alice.generate_bits_and_bases()
-    qubits = alice.encode_qubits()
-    if verbose:
-        print(f"[1/7] Alice encoded {n_qubits} qubits.")
+    rng = make_rng()
+    alice_bits = rng.integers(0, 2, size=n_qubits, dtype=np.uint8)
+    alice_bases = rng.integers(0, 2, size=n_qubits, dtype=np.uint8)
+    bob_bases = rng.integers(0, 2, size=n_qubits, dtype=np.uint8)
+    bob_bits = np.zeros(n_qubits, dtype=np.uint8)
+    eve_events = 0
 
-    channel = QuantumChannel(eve_present=eve_present, intercept_rate=intercept_rate)
-    received_qubits = channel.transmit(qubits)
     if verbose:
-        print("[2/7] Qubits transmitted through the simulated channel.")
+        print(f"[1/7] Alice prepared {n_qubits} Qiskit quantum states.")
 
-    bob = Bob(n_qubits)
-    bob.choose_bases()
-    bob.measure(received_qubits)
+    for idx in range(n_qubits):
+        state = prepare_bb84_state(int(alice_bits[idx]), int(alice_bases[idx]))
+
+        if eve_present and rng.random() < intercept_rate:
+            eve_basis = int(rng.integers(0, 2))
+            eve_bit, _ = measure_single_qubit_in_basis(state, eve_basis)
+            state = prepare_bb84_state(eve_bit, eve_basis)
+            eve_events += 1
+
+        bob_bit, _ = measure_single_qubit_in_basis(state, int(bob_bases[idx]))
+        bob_bits[idx] = bob_bit
+
     if verbose:
-        print("[3/7] Bob measured all received qubits.")
+        print("[2/7] States transmitted through the quantum simulation.")
+        print("[3/7] Bob measured the incoming states with Qiskit basis rotations.")
 
-    alice_sifted = alice.sift_key(bob.get_bases())
-    bob_sifted = bob.sift_key(alice.get_bases())
+    matching = alice_bases == bob_bases
+    alice_sifted = alice_bits[matching]
+    bob_sifted = bob_bits[matching]
     sifted_len = len(alice_sifted)
     if verbose:
         print(f"[4/7] Sifted key length: {sifted_len} bits ({sifted_len / n_qubits:.1%}).")
@@ -68,6 +78,7 @@ def run_bb84(
         "n_qubits": n_qubits,
         "eve_present": eve_present,
         "intercept_rate": intercept_rate,
+        "eve_intercepted_qubits": eve_events,
         "sifted_bits": sifted_len,
         "sifted_ratio": sifted_len / n_qubits,
         "qber": qber,
