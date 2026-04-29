@@ -6,9 +6,14 @@ from aes_cipher import AESCipher
 from bb84_pipeline import run_bb84
 from e91_pipeline import run_e91
 
+# An AAD is Additional Authenticated Data
 SESSION_AAD_BB84 = b"hybrid-bb84-aes-session-v2-qiskit"
 SESSION_AAD_E91 = b"hybrid-e91-aes-session-v1-qiskit"
 
+# The string "hybrid-bb84-aes-session-v2-qiskit" uniquely identifies 
+# a session that was built from a BB84‑derived key and the 
+# v2 version of the hybrid protocol 
+# (the E91 counterpart uses a different constant).
 
 def hybrid_encrypt(
     plaintext: str,

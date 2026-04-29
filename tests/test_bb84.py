@@ -14,6 +14,7 @@ from bb84_pipeline import run_bb84
 from e91_pipeline import run_e91
 from hybrid_encrypt import compare_protocols, hybrid_decrypt, hybrid_encrypt, hybrid_encrypt_e91
 from privacy_amplification import bits_to_bytes, privacy_amplification
+from qber_sweep import sweep_qber
 from quantum_utils import (
     E91Angles,
     measure_qubit_at_angle,
@@ -149,3 +150,13 @@ class TestHybridEncryption:
         assert result["bb84_aes"]["success"] is True
         assert result["e91_aes"]["success"] is True
         assert result["comparison"]["shared_aes_mode"] == "AES-256-GCM"
+
+
+class TestBenchmarkSweep:
+    def test_sweep_qber_writes_both_protocols(self, tmp_path: Path) -> None:
+        output = tmp_path / "qber_sweep.csv"
+        sweep_qber(trials=1, output_path=output)
+        content = output.read_text(encoding="utf-8")
+        assert "BB84+AES" in content
+        assert "E91+AES" in content
+        assert "computational_load_ms_per_quantum_unit" in content

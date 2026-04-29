@@ -68,7 +68,7 @@ The demo runs:
 - eavesdropped BB84 + AES
 - clean E91 + AES
 - eavesdropped E91 + AES
-- a quick protocol comparison summary
+- an automatic CSV benchmark refresh
 
 ## Generate QBER Sweep
 
@@ -76,7 +76,20 @@ The demo runs:
 python src\qber_sweep.py
 ```
 
-The sweep writes `results/qber_sweep.csv` with measured BB84 QBER values for intercept rates from 0% to 100%.
+The sweep writes `results/qber_sweep.csv` with comparative benchmark rows for both `BB84+AES` and `E91+AES`.
+
+The CSV includes:
+
+- intercept rate
+- protocol name
+- average runtime
+- computational load per quantum unit
+- average QBER
+- average sifted-key ratio
+- average Bell score for E91
+- aborted trials
+- success rate
+- key-generation efficiency
 
 ## Compare The Protocols
 

@@ -1,8 +1,9 @@
-"""Run BB84+AES, E91+AES, and protocol comparison demos."""
+"""Run BB84+AES and E91+AES demos, then refresh the comparison CSV."""
 
 from __future__ import annotations
 
-from hybrid_encrypt import compare_protocols, hybrid_decrypt, hybrid_encrypt, hybrid_encrypt_e91
+from hybrid_encrypt import hybrid_decrypt, hybrid_encrypt, hybrid_encrypt_e91
+from qber_sweep import sweep_qber
 
 MESSAGE = (
     "This message was encrypted using a key generated through "
@@ -11,7 +12,7 @@ MESSAGE = (
 
 
 def run_demo() -> None:
-    """Run BB84 and E91 demo scenarios plus a quick protocol comparison."""
+    """Run BB84/E91 demo scenarios and update the benchmark CSV."""
     print("\n" + "=" * 60)
     print("SCENARIO 1: Clean BB84 + AES channel")
     print("=" * 60)
@@ -51,9 +52,10 @@ def run_demo() -> None:
         print("[WARN] Session did not abort; rerun because this is probabilistic.")
 
     print("\n" + "=" * 60)
-    print("SCENARIO 5: Protocol comparison summary")
+    print("CSV UPDATE: BB84 + AES vs E91 + AES benchmark export")
     print("=" * 60)
-    print(compare_protocols(MESSAGE, bb84_qubits=1024, e91_pairs=4096))
+    output_path = sweep_qber(trials=3)
+    print(f"[PASS] Updated comparative benchmark CSV: {output_path}")
 
 
 if __name__ == "__main__":

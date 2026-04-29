@@ -10,7 +10,6 @@
 \usepackage{listings}
 \usepackage{tikz}
 \usepackage{pgfplots}
-\usepackage{pgfplotstable}
 \usepackage[hidelinks]{hyperref}
 
 \pgfplotsset{compat=1.18}
@@ -23,7 +22,7 @@
   backgroundcolor=\color{gray!8}
 }
 
-\title{Title of Work: Hybrid BB84 Quantum Key Distribution and AES-256-GCM Encryption System}
+\title{Title of Work: Qiskit-Based Hybrid BB84 + AES and Minimal E91 + AES Encryption System}
 
 \author{
 \IEEEauthorblockN{Cybersecurity Project}
@@ -36,217 +35,189 @@ Hybrid Quantum-Classical Cryptography Lab}
 \maketitle
 
 \begin{abstract}
-\textbf{What:} This paper presents a hybrid encryption system that combines a software simulation of the BB84 quantum key distribution protocol with AES-256-GCM authenticated encryption. The BB84 layer establishes a shared secret bit string between Alice and Bob, while the AES-GCM layer encrypts and authenticates the actual plaintext message.
+\textbf{What:} This work presents a Qiskit-based hybrid cryptography project that implements two quantum key distribution pipelines, BB84 + AES-256-GCM and minimal E91 + AES-256-GCM. In both cases the quantum protocol is used only for secure key establishment, while AES-256-GCM is used for efficient authenticated encryption of the actual message.
 
-\textbf{Why:} Classical public-key key exchange methods are threatened by large-scale quantum computation because Shor's algorithm can solve integer factorization and discrete logarithms in polynomial time \cite{shor1997polynomial}. AES remains efficient for bulk encryption, but it still requires a safely distributed symmetric key. BB84 addresses the key-distribution problem by using quantum measurement disturbance to detect eavesdropping \cite{bennett1984bb84}.
+\textbf{Why:} The need for quantum-safe key establishment is motivated by the long-term risk that classical public-key exchange can be weakened by quantum algorithms such as Shor's algorithm \cite{shor1997polynomial}. The base paper by Ain \emph{et al.} highlights the importance of comparing BB84 and E91 in resilient encryption systems and shows that both protocols remain central to secure quantum communication research \cite{ain2025novel}. For this lab project, the goal is not to reproduce the paper's specialized multi-basis BB84 or reverse-gate E91 design, but to build a clean educational implementation that captures the basic behavior of both protocols under Qiskit.
 
-\textbf{How:} Alice and Bob are modeled with random bit and basis generation, simulated qubit encoding, random measurement, basis reconciliation, QBER estimation, simplified reconciliation, and privacy amplification. If QBER exceeds an 11\% threshold, the key exchange aborts. Otherwise, SHAKE-256 compresses the reconciled bit string into a 256-bit key, which is then used by AES-256-GCM. The implementation is validated through unit tests, a three-scenario demo, and graph-based QBER analysis.
+\textbf{How:} BB84 is implemented as a prepare-and-measure QKD flow using Qiskit single-qubit state preparation, basis rotation, and measurement collapse. E91 is implemented as a minimal entanglement-based protocol using Bell-pair generation and CHSH-style Bell-test rounds. Both pipelines estimate eavesdropper impact using QBER, and E91 additionally checks a Bell-score threshold. Reconciliation and SHAKE-256 privacy amplification derive a 256-bit key that feeds AES-256-GCM. The resulting repository is evaluated with 21 automated tests, live protocol demos, and a comparative benchmark CSV that records time, computational load, aborted trials, success rate, and efficiency across Eve intercept rates from 0\% to 100\%.
 \end{abstract}
 
 \begin{IEEEkeywords}
-BB84, quantum key distribution, QBER, AES-256-GCM, privacy amplification, cybersecurity.
+BB84, E91, Qiskit, quantum key distribution, CHSH, QBER, AES-256-GCM, cybersecurity.
 \end{IEEEkeywords}
 
 \section{Problem Statement}
-Secure communication requires both secret-key establishment and protected data transmission. In conventional systems, public-key cryptography is often used to exchange or wrap a symmetric key, and a symmetric cipher is then used to encrypt bulk data. This design is efficient, but its security depends on computational hardness assumptions. Shor's quantum algorithm demonstrates that the assumptions behind RSA, finite-field Diffie--Hellman, and elliptic-curve Diffie--Hellman are vulnerable to a sufficiently capable quantum computer \cite{shor1997polynomial}.
+Secure communication systems must both establish a secret key and protect user data. Classical systems commonly solve these tasks by combining a public-key key-exchange method with a symmetric cipher. This is practical and fast, but the security of classical public-key exchange depends on computational hardness assumptions that are threatened by quantum computing \cite{shor1997polynomial}. AES remains appropriate for bulk encryption, but it still requires a key-distribution method that is robust against future quantum attacks.
 
-Quantum key distribution (QKD) changes the key-establishment model. In BB84, Alice sends randomly chosen bits encoded in randomly chosen conjugate bases, and Bob measures each received state using his own random bases. After transmission, they publicly compare only their basis choices and keep the positions where the bases match. If an eavesdropper Eve intercepts and measures the quantum states, her measurement disturbs some states and introduces detectable errors in the sifted key \cite{bennett1984bb84}.
+Quantum key distribution (QKD) provides a different approach. BB84 uses quantum-state disturbance under incompatible bases to reveal eavesdropping \cite{bennett1984bb84}. E91 uses entanglement and Bell-inequality style correlations to detect a compromised channel. The base paper by Ain \emph{et al.} positions BB84 and E91 as two of the most widely discussed QKD protocols and emphasizes the value of comparing them in resilient encryption settings \cite{ain2025novel}. That paper also proposes enhanced variants. In contrast, the present project focuses on basic Qiskit implementations that are easier to understand, verify, and present in a cybersecurity lab.
 
-However, BB84 alone does not encrypt large user messages. It produces shared key material. That key material must be processed through QBER estimation, reconciliation, and privacy amplification before it can safely drive a classical cipher. The problem addressed in this project is therefore to build a complete educational pipeline that demonstrates how a BB84-derived key can be used with AES-256-GCM for practical authenticated encryption.
+The central problem addressed in this report is therefore: how can a student-level project build and compare practical hybrid pipelines for BB84 + AES and E91 + AES using actual Qiskit quantum-state operations rather than a purely symbolic simulation, while still keeping the design simple enough to explain, test, and benchmark?
 
-The project also addresses a learning gap in cybersecurity laboratories. Students often study symmetric encryption, public-key key exchange, and post-quantum threats as separate topics. This separation can hide an important engineering reality: a secure communication system is not a single algorithm, but a chain of assumptions and transformations. A QKD protocol must still handle noisy measurements, information leaked during public discussion, key-length requirements, and safe use of the final key. A symmetric cipher must still be paired with a sound key-establishment process. The proposed project therefore treats the hybrid design as a system problem rather than a standalone algorithm exercise.
+\section{Objective 1: Implement Qiskit-Based BB84 + AES}
+The first objective is to upgrade the earlier BB84 implementation to a Qiskit-based prepare-and-measure flow. Alice should prepare single-qubit states in either the Z or X basis, Bob should measure using Qiskit basis rotation and measurement collapse, and the retained sifted key should be post-processed into a 256-bit AES key. The final system should encrypt and decrypt a user message through AES-256-GCM.
 
-The specific threat model is an intercept-resend adversary. Eve does not break AES directly and does not exploit implementation side channels. Instead, she tries to learn the BB84 key by measuring qubits in transit. This is the classic attack used to explain BB84's disturbance principle. When Eve chooses the wrong basis, she changes the state that Bob receives. Alice and Bob cannot identify every disturbed qubit individually, but they can estimate the error rate by sacrificing a sample of their sifted key. If the sample error rate is too high, they reject the session before any AES encryption occurs.
+\section{Objective 2: Implement Minimal Qiskit E91 + AES}
+The second objective is to add a minimal entanglement-based E91 pipeline using Qiskit Bell-pair generation. Alice and Bob should use some rounds for key generation and some rounds for Bell-test style measurements. The implementation should remain intentionally basic and should not copy the advanced reverse-gate or error-mitigation method proposed in the base paper \cite{ain2025novel}. Instead, it should provide an interpretable reference implementation that still reflects the core difference between BB84 and E91.
 
-\section{Objective 1: Implement a BB84 Key Distribution Simulator}
-The first objective is to implement a clean BB84 simulation with Alice, Bob, and a quantum channel abstraction. Alice must generate random bits and random bases, encode them as simulated qubit states, and announce bases during reconciliation. Bob must independently choose random bases, measure the received states, and keep only matching-basis positions. On a clean channel, the sifted keys should match exactly and the sifted-key ratio should remain close to 50\%, because Alice and Bob choose from two bases independently.
-
-This objective is validated by checking the shape and domain of Alice's generated arrays, verifying that encoded qubit states remain in the set $\{0,1,2,3\}$, and confirming that Alice and Bob obtain identical sifted keys on a clean channel. The 50\% sifting result is not an implementation artifact; it follows from the probability that two independent random basis choices are equal.
-
-\section{Objective 2: Detect Eavesdropping and Distill a Usable Key}
-The second objective is to model Eve and convert raw BB84 output into usable symmetric key material. Eve is implemented as an intercept-resend attacker who measures a configurable fraction of qubits in random bases and then re-sends her measured states. This behavior should raise the quantum bit error rate (QBER). The implementation estimates QBER from a sacrificed sample, aborts above the threshold, reconciles remaining key disagreements, and applies privacy amplification. Privacy amplification is essential because reconciliation and any Eve observations may leak partial information about the raw key \cite{bennett1995privacy}.
-
-This objective is validated through a QBER sweep. Instead of only testing whether Eve is detected at 100\% interception, the system records the measured QBER for intercept rates from 0\% to 100\%. This gives a more useful analysis because it demonstrates the gradual relationship between Eve's information-gathering attempt and Alice/Bob's observed disturbance.
-
-\section{Objective 3: Integrate AES-256-GCM Encryption}
-The third objective is to connect the distilled 256-bit BB84 key to AES-256-GCM. AES is standardized by NIST as a symmetric block cipher \cite{nist197}, and GCM provides authenticated encryption with integrity checking \cite{nist38d}. The implementation must support successful encryption/decryption with the correct key and must reject wrong keys or tampered ciphertext through the GCM authentication tag.
-
-This objective is validated with roundtrip encryption tests, wrong-key tests, and tampered-ciphertext tests. The final hybrid demonstration is considered successful only if BB84 produces an acceptable key, AES-GCM encrypts the plaintext, and decryption recovers the exact original message.
+\section{Objective 3: Compare the Two Hybrid Protocols}
+The third objective is to compare BB84 + AES and E91 + AES using shared metrics. The comparison should go beyond QBER alone and include runtime, computational load, aborted trials, success rate, and key-generation efficiency. This makes the project useful both as a cryptography implementation and as a lab experiment.
 
 \section{Scope of Work}
-This project is scoped as a third-year cybersecurity lab implementation. It uses a software simulation of BB84 rather than real optical hardware. Qubits are represented as state indices from 0 to 3, where each index combines one basis value and one bit value. The channel can run cleanly or with Eve present. The AES layer uses the Python \texttt{cryptography} library rather than a custom AES implementation.
+This project is scoped as an educational quantum-classical hybrid cryptography build. The quantum behavior is modeled using Qiskit state preparation, Bell-pair generation, basis rotation, and projective measurement. The work does not attempt to model full hardware noise, finite-key security proofs, authenticated classical-channel deployment, or production-grade reconciliation. The focus is on understandable protocol logic with measurable outputs.
 
-The scope includes BB84 simulation, intercept-resend eavesdropping, QBER estimation, simplified reconciliation, SHAKE-256 privacy amplification, AES-256-GCM encryption, unit tests, demo execution, and result analysis. The scope excludes physical photon transmission, detector modeling, authenticated public-channel infrastructure, full finite-key proofs, and production-grade QKD reconciliation.
+The scope includes:
+\begin{itemize}
+\item Qiskit-based BB84 prepare-and-measure key distribution
+\item Qiskit-based minimal E91 Bell-pair key distribution
+\item Eve intercept-resend style attacks
+\item QBER estimation and simplified reconciliation
+\item CHSH-style Bell-score checking for E91
+\item SHAKE-256 privacy amplification
+\item AES-256-GCM encryption and decryption
+\item Automated tests and comparative benchmarking
+\end{itemize}
 
-\begin{table}[htbp]
-\caption{Scope Boundary of the Project}
-\centering
-\begin{tabular}{p{0.43\columnwidth}p{0.43\columnwidth}}
-\toprule
-\textbf{Included} & \textbf{Excluded} \\
-\midrule
-Software BB84 simulation & Physical photon hardware \\
-Intercept-resend Eve model & Side-channel attack modeling \\
-QBER threshold decision & Full finite-key security proof \\
-Simplified reconciliation & Production Cascade/LDPC protocol \\
-SHAKE-256 key compression & Hardware random-number source audit \\
-AES-256-GCM encryption & Custom AES primitive design \\
-\bottomrule
-\end{tabular}
-\label{tab:scope}
-\end{table}
+The scope excludes the more specialized elements of the base paper such as the modified multi-basis BB84 variants, reverse quantum gate configuration for E91, and explicit error-mitigation layers \cite{ain2025novel}. Those are treated as inspiration for protocol comparison, not as implementation requirements.
 
 \section{Existing Approaches and Gaps/Improvement Areas}
 \subsection{Classical Public-Key Key Exchange}
-RSA, Diffie--Hellman, and elliptic-curve Diffie--Hellman are widely deployed because they work over normal digital networks. Their gap is that they depend on mathematical assumptions vulnerable to quantum algorithms \cite{shor1997polynomial}. The improvement area is quantum-safe key establishment or post-quantum migration.
+Traditional public-key exchange remains widely deployable and efficient, but its long-term security is exposed to quantum algorithms \cite{shor1997polynomial}. This creates a need for either post-quantum cryptography or QKD-backed key establishment.
 
-In a conventional TLS-style system, the application may use AES for the data channel, but the AES key is established through a public-key mechanism. If that public-key mechanism is later broken, recorded traffic may become vulnerable depending on the protocol and whether forward secrecy was used. This creates the ``harvest now, decrypt later'' concern for long-lived confidential data. BB84 responds to this concern by making the key exchange depend on measurement disturbance rather than factorization or discrete logarithm hardness.
+\subsection{AES-Only Encryption Demonstrations}
+AES-only projects explain confidentiality and authentication well \cite{nist197,nist38d}, but they usually assume the symmetric key already exists. The gap is that they hide the key-distribution problem, which is often the more difficult part of secure communication.
 
-\subsection{AES-Only Symmetric Encryption}
-AES is fast, standardized, and appropriate for bulk encryption \cite{nist197}. AES-GCM also detects tampering and wrong-key use \cite{nist38d}. The gap is that AES does not solve key distribution. A strong AES implementation still fails if its secret key is shared insecurely.
+\subsection{Symbolic BB84 Simulations}
+Purely symbolic BB84 simulations are useful for learning protocol flow, but they often stop short of using quantum-toolkit primitives. The gap is that they do not expose basis rotation, measurement collapse, or actual quantum-state modeling. The present project closes that gap by moving BB84 to Qiskit.
 
-An AES-only laboratory project is useful for learning confidentiality and integrity, but it can accidentally make the key appear as a given input. In real systems, key generation and distribution are often the most fragile parts of the design. This project improves on AES-only demonstrations by showing where the AES key comes from and why that source matters.
-
-\subsection{BB84-Only Key Distribution}
-BB84 provides a way to generate shared secret bits and detect measurement disturbance \cite{bennett1984bb84}. The gap is that BB84 is not a bulk encryption algorithm. Raw BB84 output requires sifting, error estimation, reconciliation, and privacy amplification before it is suitable as a symmetric key \cite{bennett1995privacy,scarani2009security}.
-
-A BB84-only simulation may stop when Alice and Bob obtain a sifted key. That is incomplete from a security-engineering perspective. The sifted key may contain errors and may be partially known to Eve. It may also have a variable length. A real encryption system needs a fixed-size key with a well-defined security interpretation. This project therefore connects BB84 output to privacy amplification and then to AES-256-GCM.
+\subsection{Research-Enhanced BB84/E91 Variants}
+The base paper extends BB84 with larger qubit-length experiments and enhanced basis strategies, and it extends E91 with a more elaborate security transformation and additional noise-oriented handling \cite{ain2025novel}. The gap for a lab setting is complexity. Such techniques are valuable in research, but they are harder to explain and harder to verify in a first implementation. The present work improves accessibility by deliberately keeping the implementations minimal while still citing the paper as a comparative reference.
 
 \subsection{Post-Quantum Cryptography}
-Post-quantum cryptography such as NIST ML-KEM is designed for deployment over existing classical networks \cite{nist203}. Its gap, compared with QKD, is that it remains computational cryptography. QKD and PQC solve related problems through different assumptions; practical systems may compare or combine both approaches.
-
-\begin{table*}[htbp]
-\caption{Approaches, Gaps, and Improvement Areas}
-\centering
-\begin{tabular}{p{0.18\textwidth}p{0.25\textwidth}p{0.25\textwidth}p{0.22\textwidth}}
-\toprule
-\textbf{Approach} & \textbf{Strength} & \textbf{Gap} & \textbf{Improvement Area} \\
-\midrule
-Classical public-key exchange & Mature, scalable, no special channel & Vulnerable to future quantum attacks for RSA/DH/ECDH & Replace or supplement with QKD/PQC \\
-AES-only encryption & Fast, standardized, practical for data & Does not distribute keys & Pair with secure key establishment \\
-BB84-only simulation & Demonstrates quantum disturbance & Does not encrypt bulk data and lacks full post-processing & Add reconciliation, privacy amplification, and AES \\
-PQC key encapsulation & Deployable on existing networks & Computational assumptions remain & Compare with or combine with QKD \\
-\bottomrule
-\end{tabular}
-\label{tab:gaps}
-\end{table*}
+Post-quantum cryptography such as ML-KEM is deployable on existing classical networks \cite{nist203}. Its trade-off relative to QKD is that it remains computational cryptography rather than disturbance-based key establishment. This project does not replace PQC, but it helps students understand what makes QKD different.
 
 \section{Novelty/Innovativeness in Project}
-The novelty of this project lies in the end-to-end educational integration. Many BB84 examples stop at sifted key generation, while many AES demonstrations assume that a key already exists. This project joins both sides: BB84 produces a key candidate, key-distillation logic makes it suitable for cryptographic use, and AES-GCM encrypts the actual message.
+The novelty of this project is the combination of three ideas in one consistent repository:
+\begin{enumerate}
+\item a Qiskit-based BB84 implementation,
+\item a minimal Qiskit-based E91 implementation, and
+\item a shared AES-256-GCM layer with comparative benchmarking.
+\end{enumerate}
 
-The project is also analysis-driven. It does not merely state that Eve is detectable; it plots how QBER changes as Eve's intercept rate increases. It also shows that the sifted-key ratio remains stable near 50\%, while the abort rate rises as QBER crosses the security threshold. This makes the statistical behavior of BB84 visible and measurable.
-
-Another innovative aspect is that the project treats failed sessions as correct behavior. In ordinary encryption demos, success often means producing ciphertext. In this hybrid system, refusing to encrypt is also a security success when QBER indicates a compromised channel. This is an important lesson: secure systems should fail closed when their assumptions are violated.
+The project is not novel because it invents a new protocol. Its novelty comes from how it turns protocol comparison into a working software artifact. The same AES layer is used after both QKD pipelines, which makes the comparison fair and easy to explain. Another practical innovation is that the benchmark records not only security outcomes but also computational cost. This matters because E91 is conceptually richer but computationally heavier in software, and the report should make that trade-off visible.
 
 \section{Proposed Method}
-The proposed method has two connected layers: a BB84 key-establishment layer and an AES-GCM encryption layer. Fig.~\ref{fig:method} summarizes the complete flow.
+The proposed system has two quantum key-establishment branches feeding one classical encryption branch. Fig.~\ref{fig:method} shows the structure.
 
 \begin{figure}[htbp]
 \centering
 \resizebox{\columnwidth}{!}{
 \begin{tikzpicture}
-\node[draw, rounded corners, minimum width=2.2cm, minimum height=0.7cm] (a) at (0,0) {Alice};
-\node[draw, rounded corners, minimum width=2.2cm, minimum height=0.7cm] (c) at (3.2,0) {Channel/Eve};
-\node[draw, rounded corners, minimum width=2.2cm, minimum height=0.7cm] (b) at (6.4,0) {Bob};
-\node[draw, rounded corners, minimum width=2.7cm, minimum height=0.7cm] (q) at (3.2,-1.4) {QBER Check};
-\node[draw, rounded corners, minimum width=2.7cm, minimum height=0.7cm] (p) at (3.2,-2.8) {Privacy Amplification};
-\node[draw, rounded corners, minimum width=2.7cm, minimum height=0.7cm] (aes) at (3.2,-4.2) {AES-256-GCM};
-\draw[->] (a) -- node[above]{qubits} (c);
-\draw[->] (c) -- node[above]{measured states} (b);
-\draw[->] (b) |- (q);
-\draw[->] (a) |- (q);
-\draw[->] (q) -- node[right]{if safe} (p);
-\draw[->] (p) -- node[right]{256-bit key} (aes);
+\node[draw, rounded corners, minimum width=2.4cm, minimum height=0.75cm] (bb84) at (0,0) {Qiskit BB84};
+\node[draw, rounded corners, minimum width=2.4cm, minimum height=0.75cm] (e91) at (0,-1.5) {Qiskit E91};
+\node[draw, rounded corners, minimum width=3.0cm, minimum height=0.75cm] (distill) at (4,-0.75) {QBER / Bell Check + Distillation};
+\node[draw, rounded corners, minimum width=2.8cm, minimum height=0.75cm] (aes) at (8,-0.75) {AES-256-GCM};
+\draw[->] (bb84) -- node[above]{key candidate} (distill);
+\draw[->] (e91) -- node[below]{key candidate} (distill);
+\draw[->] (distill) -- node[above]{256-bit key} (aes);
 \end{tikzpicture}}
-\caption{Proposed hybrid BB84 and AES-256-GCM workflow.}
+\caption{Dual-branch hybrid design used in the project.}
 \label{fig:method}
 \end{figure}
 
-\subsection{BB84 Layer}
-Alice generates random bits and bases. The implementation maps each simulated qubit state using
+\subsection{BB84 Branch}
+For BB84, Alice chooses random bits and bases. Each qubit is prepared in Qiskit using single-qubit gates. Z-basis states are prepared directly and X-basis states are prepared through a Hadamard operation. Bob chooses random measurement bases and applies the corresponding basis rotation before measurement. Matching-basis positions are retained to form the sifted key.
+
+The expected sifted-key length is approximately half the transmitted qubits:
 \begin{equation}
-\text{state} = 2 \times \text{basis} + \text{bit}.
+E[|K_s|] = \frac{n}{2}.
 \end{equation}
-Bob chooses random bases and measures the received states. If Bob's basis matches Alice's basis, the bit is deterministic. If the bases differ, the measured bit is random and later discarded.
-
-The expected sifted-key length is approximately $n/2$ for $n$ transmitted qubits:
+Eve is modeled by intercept-resend measurement on a fraction $r$ of qubits. The expected disturbance under full interception follows the familiar BB84 reasoning:
 \begin{equation}
-E[|K_s|] = n \cdot P(b_A=b_B)=n \cdot \frac{1}{2}.
+QBER \approx \frac{r}{4}.
 \end{equation}
-This expectation is visible in the experimental sweep, where the sifted-key ratio remains near 0.5 even when Eve is present. Eve changes the correctness of some retained bits, not the probability that Alice and Bob choose the same basis.
 
-\subsection{Eavesdropper and QBER Decision}
-Eve measures intercepted qubits in random bases. With full intercept-resend, she chooses the wrong basis about half the time. When Alice and Bob later keep matching-basis positions, those disturbed cases create an expected QBER near 25\%. The project aborts when estimated QBER exceeds 11\%.
-
-The simplified expected relationship between intercept rate $r$ and QBER is
+\subsection{Minimal E91 Branch}
+For E91, each round begins with preparation of a Bell pair in Qiskit. Some rounds are used for key generation and others for Bell testing. Key rounds use correlated measurements that should produce identical bits on a clean channel. Test rounds use alternate basis angles and compute a CHSH-style score:
 \begin{equation}
-QBER \approx r \times \frac{1}{2} \times \frac{1}{2} = \frac{r}{4}.
+S = E(a_0,b_0) + E(a_0,b_1) + E(a_1,b_0) - E(a_1,b_1).
 \end{equation}
-The first factor is Eve's interception probability, the second is the probability that Eve selects the wrong basis, and the third is the probability that Bob receives the wrong bit after that disturbance. This simple model explains why full interception tends toward 25\% QBER and why partial interception can be harder to detect in a small sample.
+In the minimal implementation, a session is accepted only if both QBER and Bell-score thresholds are satisfied.
 
-\subsection{Key Distillation and AES Layer}
-After QBER sampling, the remaining bits are reconciled. Privacy amplification then uses SHAKE-256 as a hash extractor to produce a 256-bit AES key. AES-GCM encrypts the plaintext with a 96-bit nonce and additional authenticated data. The authentication tag protects against ciphertext tampering, wrong-key decryption, and AAD mismatch.
-
-The project intentionally separates key establishment from message encryption. The BB84 layer decides whether key material is safe enough to use. The AES layer does not know whether Eve was present; it only receives a 32-byte key. This separation mirrors real cryptographic engineering, where protocol layers should have clear responsibilities.
+\subsection{Shared Distillation and AES Layer}
+After key establishment, both protocols pass through the same reconciliation and privacy-amplification stages. SHAKE-256 extracts a 256-bit key, and AES-256-GCM performs authenticated encryption. Using the same AES layer isolates the comparison to the QKD side.
 
 \section{Implementation and Result}
 \subsection{Implementation Summary}
-The implementation is organized as Python modules. \texttt{alice.py}, \texttt{bob.py}, and \texttt{channel.py} implement the BB84 actors and channel. \texttt{reconciliation.py} estimates QBER and corrects Bob's key. \texttt{privacy\_amplification.py} derives the final 256-bit key. \texttt{aes\_cipher.py} wraps AES-256-GCM. \texttt{bb84\_pipeline.py} orchestrates key distribution, while \texttt{hybrid\_encrypt.py} combines key generation with message encryption.
+The final repository replaces the old symbolic BB84 path with Qiskit-based helpers and adds a parallel E91 path. The most important modules are:
+\begin{itemize}
+\item \texttt{quantum\_utils.py}: Qiskit state preparation, Bell-pair generation, basis rotation, and measurement helpers
+\item \texttt{bb84\_pipeline.py}: Qiskit prepare-and-measure BB84
+\item \texttt{e91\_pipeline.py}: minimal Bell-pair E91 with CHSH-style checks
+\item \texttt{hybrid\_encrypt.py}: shared AES integration for both protocols
+\item \texttt{qber\_sweep.py}: comparative CSV benchmark generation
+\end{itemize}
 
 \begin{table*}[htbp]
-\caption{Implementation Module Mapping}
+\caption{Updated Module Mapping}
 \centering
 \begin{tabular}{p{0.20\textwidth}p{0.34\textwidth}p{0.34\textwidth}}
 \toprule
-\textbf{Module} & \textbf{Responsibility} & \textbf{Relation to BB84 + AES} \\
+\textbf{Module} & \textbf{Responsibility} & \textbf{Relation to Final System} \\
 \midrule
-\texttt{alice.py} & Generates Alice's random bits and bases; encodes simulated qubits & Starts BB84 key establishment \\
-\texttt{bob.py} & Chooses measurement bases and measures received states & Produces Bob's raw measured key \\
-\texttt{channel.py} & Passes qubits cleanly or applies Eve intercept-resend & Models quantum-channel disturbance \\
-\texttt{reconciliation.py} & Estimates QBER and corrects Bob's remaining bits & Decides whether key material is safe to continue \\
-\texttt{privacy\_amplification.py} & Packs bits and derives a fixed 256-bit key & Converts reconciled bits into AES key material \\
-\texttt{aes\_cipher.py} & Encrypts/decrypts using AES-256-GCM & Provides authenticated bulk encryption \\
-\texttt{bb84\_pipeline.py} & Runs the full BB84 sequence & Produces final key or aborts \\
-\texttt{hybrid\_encrypt.py} & Bridges BB84 output to AES-GCM & Implements the full hybrid system \\
+\texttt{quantum\_utils.py} & Qiskit state preparation and measurement helpers & Shared quantum primitives for BB84 and E91 \\
+\texttt{bb84\_pipeline.py} & Prepare-and-measure QKD pipeline & Produces BB84-derived AES key or aborts \\
+\texttt{e91\_pipeline.py} & Bell-pair key generation and CHSH checks & Produces E91-derived AES key or aborts \\
+\texttt{reconciliation.py} & QBER sampling and simplified correction & Shared post-processing for both protocols \\
+\texttt{privacy\_amplification.py} & SHAKE-256 key extraction & Converts reconciled bits to 256-bit AES key \\
+\texttt{aes\_cipher.py} & AES-256-GCM wrapper & Shared encryption/authentication layer \\
+\texttt{hybrid\_encrypt.py} & Protocol-to-AES bridge & Exposes BB84+AES and E91+AES interfaces \\
+\texttt{qber\_sweep.py} & Comparative benchmark exporter & Measures runtime, aborts, efficiency, and security stats \\
 \bottomrule
 \end{tabular}
 \label{tab:modules}
 \end{table*}
 
-\begin{lstlisting}
-1. Alice generates bits and BB84 bases.
-2. Alice sends simulated qubit states.
-3. Eve optionally intercepts and re-sends states.
-4. Bob measures with random bases.
-5. Alice and Bob keep matching-basis positions.
-6. A sample estimates QBER.
-7. High QBER aborts the session.
-8. Safe keys are reconciled and compressed.
-9. AES-256-GCM encrypts the message.
-\end{lstlisting}
-
-\subsection{Demo Results}
-The system was executed with three scenarios. A clean channel encrypted and decrypted successfully. Full interception produced QBER near the theoretical 25\% level and aborted. Partial interception produced lower QBER and may remain below the abort threshold.
+\subsection{Live Demo Results}
+The live demo produced the following representative outcomes:
+\begin{itemize}
+\item Clean BB84 + AES: success, QBER $=0.00\%$
+\item BB84 with full intercept-resend: abort, QBER $=25.49\%$
+\item Clean E91 + AES: success, QBER $=0.00\%$, Bell score $=2.842$
+\item E91 with full interception: abort, QBER $=24.44\%$, Bell score $=1.355$
+\end{itemize}
 
 \begin{table}[htbp]
-\caption{Representative Demo Result}
+\caption{Representative Demo Outcome}
 \centering
 \begin{tabular}{lccc}
 \toprule
-\textbf{Scenario} & \textbf{QBER} & \textbf{Action} & \textbf{Status} \\
+\textbf{Scenario} & \textbf{QBER} & \textbf{Extra Check} & \textbf{Result} \\
 \midrule
-Clean channel & 0.00\% & Encrypt & Pass \\
-Eve 100\% & 25.49\% & Abort & Pass \\
-Eve 30\% & 6.47\% & Continue & Observed \\
+Clean BB84 + AES & 0.00\% & -- & Pass \\
+Eavesdropped BB84 + AES & 25.49\% & -- & Abort \\
+Clean E91 + AES & 0.00\% & $S=2.842$ & Pass \\
+Eavesdropped E91 + AES & 24.44\% & $S=1.355$ & Abort \\
 \bottomrule
 \end{tabular}
 \label{tab:demo}
 \end{table}
 
-\subsection{Graph Analysis: QBER vs Intercept Rate}
-Fig.~\ref{fig:qber} shows that QBER increases as Eve intercepts more qubits. The dashed line marks the 11\% abort threshold. In the recorded sweep, the average QBER crosses the threshold around 50\% interception.
+\subsection{Comparative Benchmark Method}
+The benchmark was generated across 11 intercept rates from $0.0$ to $1.0$, with 3 trials per rate and per protocol. For BB84 the benchmark uses 2048 qubits per trial. For E91 it uses 4096 entangled pairs per trial. The exported CSV records:
+\begin{itemize}
+\item average runtime in seconds,
+\item computational load in milliseconds per quantum unit,
+\item average QBER,
+\item average sifted-key ratio,
+\item average Bell score for E91,
+\item aborted trials,
+\item success rate,
+\item key-generation efficiency in bits per quantum unit, and
+\item effective key-generation efficiency in bits per second.
+\end{itemize}
 
-The graph is also useful because it separates two ideas that are often confused. Eve's intercept rate is not the same as QBER. If Eve intercepts every qubit, she still chooses the correct basis about half the time. Even when she chooses the wrong basis, the final bit is wrong only probabilistically. Therefore, the observed QBER is lower than the intercept rate. This is why the slope of the measured curve is close to one quarter rather than one.
+\subsection{Graph Analysis: QBER Comparison}
+Fig.~\ref{fig:qbercompare} compares average QBER for BB84 and E91. Both protocols start at zero under a clean channel and rise as Eve intercepts more states. In this benchmark the two protocols show broadly similar QBER growth, with E91 slightly higher at larger intercept rates.
 
 \begin{figure}[htbp]
 \centering
@@ -257,7 +228,7 @@ The graph is also useful because it separates two ideas that are often confused.
   xlabel={Eve intercept rate},
   ylabel={Average QBER},
   xmin=0, xmax=1,
-  ymin=0, ymax=0.28,
+  ymin=0, ymax=0.32,
   grid=both,
   legend pos=north west,
   tick label style={font=\scriptsize},
@@ -265,24 +236,27 @@ The graph is also useful because it separates two ideas that are often confused.
   legend style={font=\scriptsize}
 ]
 \addplot[color=blue, mark=*] coordinates {
-  (0.0,0.000000) (0.1,0.020469) (0.2,0.050286)
-  (0.3,0.069905) (0.4,0.093230) (0.5,0.123827)
-  (0.6,0.148194) (0.7,0.175676) (0.8,0.199614)
-  (0.9,0.228656) (1.0,0.259846)
+  (0.0,0.000000) (0.1,0.010173) (0.2,0.064875) (0.3,0.074904)
+  (0.4,0.078701) (0.5,0.099378) (0.6,0.163981) (0.7,0.178575)
+  (0.8,0.200673) (0.9,0.260643) (1.0,0.253576)
 };
-\addlegendentry{Measured QBER}
-\addplot[color=red, dashed, domain=0:1] {0.11};
-\addlegendentry{Abort threshold}
+\addlegendentry{BB84+AES}
+\addplot[color=red, mark=square*] coordinates {
+  (0.0,0.000000) (0.1,0.022069) (0.2,0.029336) (0.3,0.078546)
+  (0.4,0.055914) (0.5,0.104672) (0.6,0.165375) (0.7,0.176136)
+  (0.8,0.227451) (0.9,0.302400) (1.0,0.289306)
+};
+\addlegendentry{E91+AES}
+\addplot[color=black, dashed, domain=0:1] {0.11};
+\addlegendentry{QBER threshold}
 \end{axis}
 \end{tikzpicture}
-\caption{QBER increases with Eve's intercept rate.}
-\label{fig:qber}
+\caption{Average QBER under increasing Eve interception.}
+\label{fig:qbercompare}
 \end{figure}
 
-\subsection{Graph Analysis: Sifted-Key Ratio}
-Fig.~\ref{fig:sifted} shows that the sifted-key ratio remains close to 0.5 across all intercept rates. This is expected because sifting depends mainly on whether Alice and Bob chose the same basis, not on whether Eve was present.
-
-This graph confirms that the simulator is not accidentally discarding more bits when Eve is present. Eve changes the reliability of retained bits, while basis reconciliation controls the retained-bit count. A stable sifted ratio makes the QBER trend easier to interpret because changes in QBER are not caused by major changes in sample size.
+\subsection{Graph Analysis: Runtime and Computational Load}
+Fig.~\ref{fig:runtimecompare} shows the runtime gap between the two protocols. BB84 is consistently faster because it manipulates one qubit per round. E91 is slower because it prepares entangled states and performs more complex measurements. This aligns with the conceptual difference identified in the base paper: E91 is generally richer but more operationally demanding \cite{ain2025novel}.
 
 \begin{figure}[htbp]
 \centering
@@ -291,116 +265,167 @@ This graph confirms that the simulator is not accidentally discarding more bits 
   width=\columnwidth,
   height=5cm,
   xlabel={Eve intercept rate},
-  ylabel={Average sifted-key ratio},
+  ylabel={Average runtime (s)},
   xmin=0, xmax=1,
-  ymin=0.48, ymax=0.52,
+  ymin=0, ymax=10.5,
   grid=both,
-  tick label style={font=\scriptsize},
-  label style={font=\scriptsize}
-]
-\addplot[color=teal!70!black, mark=square*] coordinates {
-  (0.0,0.499097) (0.1,0.501807) (0.2,0.500220)
-  (0.3,0.503345) (0.4,0.501025) (0.5,0.501147)
-  (0.6,0.499365) (0.7,0.501367) (0.8,0.504126)
-  (0.9,0.498291) (1.0,0.505371)
-};
-\addplot[color=black, dashed, domain=0:1] {0.5};
-\end{axis}
-\end{tikzpicture}
-\caption{The sifted-key ratio remains near the theoretical 50\% value.}
-\label{fig:sifted}
-\end{figure}
-
-\subsection{Graph Analysis: Abort Behavior}
-Fig.~\ref{fig:abort} plots aborted trials out of five runs per intercept rate. The result shows that abort probability rises sharply once QBER crosses the threshold. The 40\% case produced only one abort because measured QBER was still often below 11\%, while 50\% and above were mostly or fully rejected.
-
-The abort graph highlights the statistical nature of BB84 detection. A single partial-interception session may pass if the sampled bits do not produce QBER above the threshold. This does not mean Eve is harmless. It means that security decisions depend on sample size, threshold selection, channel noise, and the amount of privacy amplification. A production QKD system would use finite-key bounds rather than the simple threshold used in this lab.
-
-\begin{figure}[htbp]
-\centering
-\begin{tikzpicture}
-\begin{axis}[
-  ybar,
-  width=\columnwidth,
-  height=5cm,
-  xlabel={Eve intercept rate},
-  ylabel={Aborted trials out of 5},
-  ymin=0, ymax=5.5,
-  symbolic x coords={0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0},
-  xtick=data,
-  x tick label style={rotate=45, anchor=east, font=\scriptsize},
+  legend pos=north west,
   tick label style={font=\scriptsize},
   label style={font=\scriptsize},
-  grid=major,
-  bar width=5pt
+  legend style={font=\scriptsize}
 ]
-\addplot[fill=orange!75!black] coordinates {
-  (0.0,0) (0.1,0) (0.2,0) (0.3,0) (0.4,1)
-  (0.5,5) (0.6,4) (0.7,5) (0.8,5) (0.9,5) (1.0,5)
+\addplot[color=blue, mark=*] coordinates {
+  (0.0,0.546025) (0.1,1.100675) (0.2,1.452519) (0.3,1.394426)
+  (0.4,1.633618) (0.5,1.646374) (0.6,1.740032) (0.7,2.089598)
+  (0.8,2.170914) (0.9,2.499654) (1.0,1.704052)
 };
+\addlegendentry{BB84+AES}
+\addplot[color=red, mark=square*] coordinates {
+  (0.0,4.840439) (0.1,5.055720) (0.2,4.206959) (0.3,5.365037)
+  (0.4,5.015784) (0.5,4.084027) (0.6,7.562719) (0.7,9.062013)
+  (0.8,9.456227) (0.9,8.999150) (1.0,9.634138)
+};
+\addlegendentry{E91+AES}
 \end{axis}
 \end{tikzpicture}
-\caption{Session aborts increase after QBER crosses the security threshold.}
-\label{fig:abort}
+\caption{Average runtime comparison for BB84+AES and E91+AES.}
+\label{fig:runtimecompare}
 \end{figure}
 
-\subsection{Tabulated Sweep Result}
-Table~\ref{tab:sweep} lists the measured sweep values. The clean-channel QBER is 0, while full interception approaches the theoretical 25\% value.
+\subsection{Graph Analysis: Success Rate}
+Fig.~\ref{fig:successcompare} shows the fraction of successful sessions. BB84 begins to fail regularly at moderate-to-high intercept rates, while E91 remains successful up to 0.4 in this benchmark but collapses completely from 0.5 onward because it must satisfy both QBER and Bell-score constraints.
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=\columnwidth,
+  height=5cm,
+  xlabel={Eve intercept rate},
+  ylabel={Success rate},
+  xmin=0, xmax=1,
+  ymin=0, ymax=1.1,
+  grid=both,
+  legend pos=south west,
+  tick label style={font=\scriptsize},
+  label style={font=\scriptsize},
+  legend style={font=\scriptsize}
+]
+\addplot[color=blue, mark=*] coordinates {
+  (0.0,1.0) (0.1,1.0) (0.2,1.0) (0.3,0.666667) (0.4,1.0)
+  (0.5,0.666667) (0.6,0.0) (0.7,0.0) (0.8,0.0) (0.9,0.0) (1.0,0.0)
+};
+\addlegendentry{BB84+AES}
+\addplot[color=red, mark=square*] coordinates {
+  (0.0,1.0) (0.1,1.0) (0.2,1.0) (0.3,1.0) (0.4,1.0)
+  (0.5,0.0) (0.6,0.0) (0.7,0.0) (0.8,0.0) (0.9,0.0) (1.0,0.0)
+};
+\addlegendentry{E91+AES}
+\end{axis}
+\end{tikzpicture}
+\caption{Observed success rate over the intercept-rate sweep.}
+\label{fig:successcompare}
+\end{figure}
+
+\subsection{Graph Analysis: E91 Bell Score}
+The E91-specific Bell score is shown in Fig.~\ref{fig:bellscore}. The clean-channel score is approximately 2.946, comfortably above the acceptance threshold of 2.20. As Eve intercepts more qubits, the Bell score decreases steadily and falls below threshold around the 0.5 region. This is the main extra security signal that E91 contributes beyond BB84.
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=\columnwidth,
+  height=5cm,
+  xlabel={Eve intercept rate},
+  ylabel={Average Bell score},
+  xmin=0, xmax=1,
+  ymin=1.2, ymax=3.1,
+  grid=both,
+  legend pos=south west,
+  tick label style={font=\scriptsize},
+  label style={font=\scriptsize},
+  legend style={font=\scriptsize}
+]
+\addplot[color=purple, mark=triangle*] coordinates {
+  (0.0,2.945745) (0.1,2.705141) (0.2,2.579457) (0.3,2.413588)
+  (0.4,2.273986) (0.5,2.142736) (0.6,1.994647) (0.7,1.853842)
+  (0.8,1.767926) (0.9,1.581607) (1.0,1.434337)
+};
+\addlegendentry{E91 Bell score}
+\addplot[color=black, dashed, domain=0:1] {2.2};
+\addlegendentry{Bell threshold}
+\end{axis}
+\end{tikzpicture}
+\caption{E91 Bell-score degradation under increasing interception.}
+\label{fig:bellscore}
+\end{figure}
+
+\subsection{Tabulated Comparison}
+Table~\ref{tab:benchsummary} summarizes selected benchmark values. Several conclusions are immediate:
+\begin{itemize}
+\item BB84 is computationally lighter than E91.
+\item BB84 has a much higher sifted-key ratio because E91 spends many rounds on Bell tests.
+\item E91 provides an extra Bell-correlation signal that BB84 does not have.
+\item Both protocols fail under strong eavesdropping, but they expose that failure differently.
+\end{itemize}
 
 \begin{table*}[htbp]
-\caption{QBER Sweep Result Across Eve Intercept Rates}
+\caption{Representative Comparative Benchmark Snapshot}
 \centering
-\begin{tabular}{cccccccccccc}
+\begin{tabular}{lccccccc}
 \toprule
-\textbf{Rate} & 0.0 & 0.1 & 0.2 & 0.3 & 0.4 & 0.5 & 0.6 & 0.7 & 0.8 & 0.9 & 1.0 \\
+\textbf{Protocol} & \textbf{Intercept Rate} & \textbf{Avg. Runtime (s)} & \textbf{Comp. Load} & \textbf{Avg. QBER} & \textbf{Avg. Sifted Ratio} & \textbf{Bell Score} & \textbf{Success Rate} \\
 \midrule
-\textbf{Avg. QBER} & .000 & .020 & .050 & .070 & .093 & .124 & .148 & .176 & .200 & .229 & .260 \\
-\textbf{Sifted Ratio} & .499 & .502 & .500 & .503 & .501 & .501 & .499 & .501 & .504 & .498 & .505 \\
-\textbf{Aborts/5} & 0 & 0 & 0 & 0 & 1 & 5 & 4 & 5 & 5 & 5 & 5 \\
+BB84+AES & 0.0 & 0.546 & 0.267 ms/qubit & 0.000 & 0.495 & -- & 1.000 \\
+BB84+AES & 0.5 & 1.646 & 0.804 ms/qubit & 0.099 & 0.494 & -- & 0.667 \\
+BB84+AES & 1.0 & 1.704 & 0.832 ms/qubit & 0.254 & 0.511 & -- & 0.000 \\
+E91+AES & 0.0 & 4.840 & 1.182 ms/pair & 0.000 & 0.112 & 2.946 & 1.000 \\
+E91+AES & 0.5 & 4.084 & 0.997 ms/pair & 0.105 & 0.116 & 2.143 & 0.000 \\
+E91+AES & 1.0 & 9.634 & 2.352 ms/pair & 0.289 & 0.113 & 1.434 & 0.000 \\
 \bottomrule
 \end{tabular}
-\label{tab:sweep}
+\label{tab:benchsummary}
 \end{table*}
 
 \subsection{Validation}
-The test suite collected 17 tests and all passed. The tests validate Alice's data generation, clean-channel key agreement, approximate 50\% sifting, Eve-induced QBER, pipeline abort behavior, reconciliation, privacy-amplification length, AES roundtrip encryption, wrong-key rejection, ciphertext tamper detection, and full hybrid encrypt/decrypt.
+The test suite now contains 21 passing tests. These validate Qiskit BB84 state preparation, Bell-pair correlation, BB84 key extraction, E91 key extraction, abort behavior under full interception, AES roundtrip encryption, wrong-key rejection, ciphertext tamper detection, privacy amplification, and comparative benchmark export.
 
 \begin{table}[htbp]
-\caption{Security Property Validation}
+\caption{Validation Summary}
 \centering
-\begin{tabular}{p{0.40\columnwidth}p{0.45\columnwidth}}
+\begin{tabular}{p{0.39\columnwidth}p{0.46\columnwidth}}
 \toprule
 \textbf{Property} & \textbf{Validation Method} \\
 \midrule
-Clean BB84 agreement & Alice/Bob sifted-key equality test \\
-Eve disturbance & QBER above threshold under full intercept \\
-Key length correctness & 32-byte privacy-amplified output \\
-AES confidentiality path & Encrypt/decrypt roundtrip test \\
-Wrong-key rejection & AES-GCM InvalidTag exception \\
-Tamper detection & Modified ciphertext fails decryption \\
+Qiskit BB84 measurement correctness & Deterministic same-basis measurement test \\
+Bell-pair correctness & Perfect Z-correlation test \\
+BB84 secure-key path & Clean-channel 32-byte key generation \\
+E91 secure-key path & Clean-channel 32-byte key generation \\
+QKD abort behavior & Full-eavesdropping abort tests \\
+AES correctness & Encrypt/decrypt roundtrip test \\
+Integrity protection & Wrong-key and tamper detection tests \\
+Benchmark integrity & CSV output includes both protocols and metrics \\
 \bottomrule
 \end{tabular}
 \label{tab:validation}
 \end{table}
 
-The implementation uses AES-GCM from a standard cryptographic library rather than implementing AES manually. This is important because custom cipher implementations can introduce timing bugs, incorrect padding behavior, nonce misuse, or authentication mistakes. The educational focus is on hybrid protocol composition, so a vetted AES-GCM primitive is the safer engineering choice.
-
 \section{Conclusion}
-The project successfully implements a hybrid BB84 + AES encryption system in IEEE-style research form. BB84 is used to establish the symmetric key, while AES-256-GCM is used for efficient authenticated encryption of the message. The results show that a clean channel generates matching key material and supports AES encryption, while a full intercept-resend Eve raises QBER near 25\% and causes the session to abort.
+The updated project successfully aligns the repository and the report with the real implementation that now exists: Qiskit-based BB84 + AES and minimal Qiskit-based E91 + AES. Relative to the earlier symbolic BB84-only build, the new implementation is more faithful to quantum behavior because it uses explicit state preparation, basis rotation, Bell-pair generation, and measurement collapse through Qiskit.
 
-The graphs support the expected theory: QBER increases with Eve's intercept rate, the sifted-key ratio remains close to 50\%, and aborts become frequent after the measured QBER exceeds the threshold. Therefore, the implementation meets the educational goal of connecting quantum key distribution concepts with classical symmetric encryption in a measurable cybersecurity project.
+The results show a clear contrast between the two QKD strategies. BB84 is simpler and faster, with a higher sifted-key ratio and lower computational load. E91 is slower and more expensive in software, but it provides an additional Bell-correlation security signal that is absent in BB84. Under strong interception both protocols fail safely, which is the correct outcome in a secure system. In that sense the project supports the same broad motivation as the base paper \cite{ain2025novel}: BB84 and E91 are both valuable, but they occupy different points in the trade-off space between simplicity, interpretability, and entanglement-based security evidence.
 
 \section{Future Work}
-Future work can improve both realism and security. The simplified reconciliation function can be replaced with a full Cascade or LDPC-based reconciliation protocol. The public classical channel should be authenticated to prevent man-in-the-middle attacks. Finite-key analysis can be added to account for statistical uncertainty in QBER sampling.
+Several next steps would strengthen the project further. First, the main CSV file should replace the pending-update file once the spreadsheet lock is released, and the report graphs can then be bound directly to that finalized export. Second, the IEEE report can be extended with additional graphs such as key bits per second and aborted-trial histograms. Third, the classical channel can be authenticated, which would close the man-in-the-middle gap common to many educational QKD prototypes.
 
-The channel model can also be extended with photon loss, detector dark counts, optical misalignment, and background noise. A future version may compare BB84 with post-quantum key encapsulation such as ML-KEM \cite{nist203}, or build a hybrid demonstration where PQC authenticates the classical channel and BB84 supplies the session key. A graphical dashboard could further improve learning by visualizing basis choices, discarded bits, QBER, abort decisions, and AES-GCM ciphertext output.
+On the protocol side, a future version may add realistic hardware-style noise, detector bias, or finite-key analysis. It would also be useful to implement a more advanced E91 variant and compare it directly against the base paper's enhanced design \cite{ain2025novel}. Finally, a future hybrid project could compare QKD not only against itself but also against NIST post-quantum key encapsulation, giving students a broader view of quantum-safe communication design.
 
 \begin{thebibliography}{00}
+\bibitem{ain2025novel}
+N. U. Ain, M. Waqar, A. Bilal, A. Kim, H. Ali, U. U. Tariq, and M. S. Nadeem, ``A novel approach based on quantum key distribution using BB84 and E91 protocol for resilient encryption and eavesdropper detection,'' \emph{IEEE Access}, vol. 13, pp. 32819--32843, 2025, doi: 10.1109/ACCESS.2025.3539178.
+
 \bibitem{bennett1984bb84}
 C. H. Bennett and G. Brassard, ``Quantum cryptography: Public key distribution and coin tossing,'' in \emph{Proc. IEEE Int. Conf. Computers, Systems and Signal Processing}, Bangalore, India, pp. 175--179, 1984.
-
-\bibitem{bennett1992experimental}
-C. H. Bennett, F. Bessette, G. Brassard, L. Salvail, and J. Smolin, ``Experimental quantum cryptography,'' \emph{Journal of Cryptology}, vol. 5, no. 1, pp. 3--28, 1992.
 
 \bibitem{bennett1995privacy}
 C. H. Bennett, G. Brassard, C. Crepeau, and U. M. Maurer, ``Generalized privacy amplification,'' \emph{IEEE Transactions on Information Theory}, vol. 41, no. 6, pp. 1915--1923, 1995.
