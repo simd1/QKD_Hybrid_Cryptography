@@ -11,9 +11,9 @@ from qiskit import QuantumCircuit
 from qiskit.quantum_info import Statevector
 
 
-def make_rng() -> np.random.Generator:
-    """Return a cryptographically seeded NumPy generator."""
-    return np.random.default_rng(secrets.randbits(128))
+def make_rng(seed: int | None = None) -> np.random.Generator:
+    """Return a NumPy generator; provide a seed for reproducible experiments."""
+    return np.random.default_rng(seed if seed is not None else secrets.randbits(128))
 
 
 def prepare_bb84_state(bit: int, basis: int) -> Statevector:

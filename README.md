@@ -1,11 +1,12 @@
 # Hybrid BB84 / E91 + AES-256-GCM
 
-This cybersecurity lab project demonstrates two hybrid quantum-classical encryption workflows implemented with Qiskit:
+This cybersecurity lab project compares three hybrid key-establishment workflows feeding AES-256-GCM:
 
-1. `BB84 + AES-256-GCM`
-2. `Minimal E91 + AES-256-GCM`
+1. `RSA-OAEP + AES-256-GCM` (classical baseline)
+2. `BB84 + AES-256-GCM` (simulated QKD)
+3. `Minimal E91 + AES-256-GCM` (simulated QKD)
 
-The project uses Qiskit state preparation, entanglement, basis rotation, and measurement collapse to model actual quantum behavior in software.
+The QKD paths use Qiskit state preparation, entanglement, basis rotation, and measurement collapse to model quantum behavior in software. They are educational simulations, not hardware QKD or finite-key security proofs.
 
 ## What The Project Includes
 
@@ -75,6 +76,14 @@ The demo runs:
 ```powershell
 python src\qber_sweep.py
 ```
+
+Generate a reproducible three-way comparison (RSA/AES, BB84/AES, E91/AES):
+
+```bash
+python -c "from pathlib import Path; from src.qber_sweep import run_comparison; print(run_comparison(trials=30, seed=20261112, output_dir=Path('results')))"
+```
+
+This writes trial-level observations to `results/comparison_trials.csv` and aggregate results, approximate 95% intervals, and environment versions to `results/comparison_summary.csv`. Simulator runtimes describe this software implementation only, not physical QKD throughput. Reconciliation now simulates public parity leakage and privacy amplification aborts when a heuristic secret-bit estimate is insufficient; these models are not validated composable security proofs and do not establish proven secure key material.
 
 The sweep writes `results/qber_sweep.csv` with comparative benchmark rows for both `BB84+AES` and `E91+AES`.
 

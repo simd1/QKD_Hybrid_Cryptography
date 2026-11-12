@@ -15,6 +15,8 @@ from e91_pipeline import run_e91
 from hybrid_encrypt import compare_protocols, hybrid_decrypt, hybrid_encrypt, hybrid_encrypt_e91
 from privacy_amplification import bits_to_bytes, privacy_amplification
 from qber_sweep import sweep_qber
+from qber_sweep import run_comparison
+from rsa_hybrid import rsa_aes_encrypt, rsa_aes_decrypt
 from quantum_utils import (
     E91Angles,
     measure_qubit_at_angle,
@@ -22,7 +24,7 @@ from quantum_utils import (
     prepare_bb84_state,
     prepare_bell_state,
 )
-from reconciliation import cascade_reconciliation, estimate_qber
+from reconciliation import cascade_reconciliation, estimate_qber, parity_reconciliation, wilson_upper_bound
 
 
 class TestQiskitHelpers:
@@ -55,6 +57,12 @@ class TestBB84Pipeline:
         assert metrics["qber"] == 0.0
         assert 0.40 < metrics["sifted_ratio"] < 0.60
 
+    def test_bb84_seed_reproduces_metrics(self) -> None:
+        _, first = run_bb84(n_qubits=512, verbose=False, return_metrics=True, seed=91)
+        _, second = run_bb84(n_qubits=512, verbose=False, return_metrics=True, seed=91)
+        assert first["qber"] == second["qber"]
+        assert first["sifted_bits"] == second["sifted_bits"]
+
     def test_bb84_aborts_with_full_eavesdropping(self) -> None:
         result = run_bb84(n_qubits=1024, eve_present=True, intercept_rate=1.0, verbose=False)
         assert result is None
@@ -81,19 +89,30 @@ class TestReconciliation:
     def test_estimate_qber_removes_sample(self) -> None:
         alice = np.array([0, 1, 0, 1, 1, 0, 1, 0], dtype=np.uint8)
         bob = np.array([0, 1, 1, 1, 1, 0, 0, 0], dtype=np.uint8)
-        qber, alice_remaining, bob_remaining = estimate_qber(alice, bob, sample_fraction=0.25)
+        qber, alice_remaining, bob_remaining, sample_bits = estimate_qber(alice, bob, sample_fraction=0.25, seed=2)
         assert 0.0 <= qber <= 1.0
+        assert sample_bits == 2
         assert len(alice_remaining) == 6
         assert len(bob_remaining) == 6
 
     def test_reconciliation_corrects_bob_key(self) -> None:
         alice = np.array([0, 1, 0, 1, 1, 0, 1, 0], dtype=np.uint8)
         bob = np.array([0, 1, 1, 1, 1, 0, 0, 0], dtype=np.uint8)
-        corrected = cascade_reconciliation(alice, bob)
+        corrected, leakage, agreed = parity_reconciliation(alice, bob, seed=7)
         assert np.array_equal(corrected, alice)
+        assert leakage > 0 and agreed
+
+    def test_qber_upper_bound_is_conservative(self) -> None:
+        assert wilson_upper_bound(0, 100) > 0
 
 
 class TestAES:
+    def test_rsa_aes_roundtrip(self) -> None:
+        message = "RSA wraps the same AES-GCM session-key size."
+        result = rsa_aes_encrypt(message)
+        decrypted = rsa_aes_decrypt(**{k: result[k] for k in ("ciphertext", "nonce", "aad", "wrapped_key", "private_key_pem")})
+        assert decrypted == message
+
     def test_encrypt_decrypt_roundtrip(self) -> None:
         cipher = AESCipher(b"A" * 32)
         result = cipher.encrypt("Hello, quantum world!")
@@ -123,13 +142,18 @@ class TestPrivacyAmplification:
 
     def test_output_length(self) -> None:
         bits = np.random.randint(0, 2, 512, dtype=np.uint8)
-        key = privacy_amplification(bits, output_bits=256)
+        key = privacy_amplification(bits, output_bits=256, seed=b"test", estimated_secret_bits=300)
         assert len(key) == 32
 
     def test_insufficient_bits_raises(self) -> None:
         bits = np.random.randint(0, 2, 100, dtype=np.uint8)
         with pytest.raises(ValueError):
-            privacy_amplification(bits, output_bits=256)
+            privacy_amplification(bits, output_bits=256, seed=b"test", estimated_secret_bits=300)
+
+    def test_privacy_amplification_rejects_insufficient_estimated_entropy(self) -> None:
+        bits = np.random.randint(0, 2, 512, dtype=np.uint8)
+        with pytest.raises(ValueError):
+            privacy_amplification(bits, output_bits=256, seed=b"test", estimated_secret_bits=200)
 
 
 class TestHybridEncryption:
@@ -160,3 +184,9 @@ class TestBenchmarkSweep:
         assert "BB84+AES" in content
         assert "E91+AES" in content
         assert "computational_load_ms_per_quantum_unit" in content
+
+    def test_three_way_comparison_writes_raw_and_summary(self, tmp_path: Path) -> None:
+        raw, summary = run_comparison(trials=1, seed=5, bb84_qubits=1024, e91_pairs=4096, output_dir=tmp_path)
+        assert raw.exists() and summary.exists()
+        content = raw.read_text(encoding="utf-8")
+        assert "RSA+AES-GCM" in content and "BB84+AES-GCM" in content and "E91+AES-GCM" in content

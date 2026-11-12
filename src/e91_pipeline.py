@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import numpy as np
+from qiskit import QuantumCircuit
 
 from privacy_amplification import privacy_amplification
 from quantum_utils import E91Angles, bit_to_spin, make_rng, measure_qubit_at_angle, prepare_bell_state
-from reconciliation import cascade_reconciliation, estimate_qber
+from reconciliation import estimate_qber, parity_reconciliation, wilson_upper_bound
 
 QBER_THRESHOLD = 0.11
 CHSH_THRESHOLD = 2.2
@@ -19,14 +20,18 @@ def run_e91(
     key_bits: int = 256,
     verbose: bool = True,
     return_metrics: bool = False,
+    seed: int | None = None,
+    bit_flip_rate: float = 0.0,
+    phase_flip_rate: float = 0.0,
+    loss_rate: float = 0.0,
 ) -> bytes | None | tuple[bytes | None, dict[str, float | int | bool | str]]:
     """Run a minimal entanglement-based E91 workflow and return an AES key."""
     if n_pairs <= 0:
         raise ValueError("n_pairs must be positive")
     if key_bits <= 0 or key_bits % 8 != 0:
         raise ValueError("key_bits must be a positive multiple of 8")
-    if not 0.0 <= intercept_rate <= 1.0:
-        raise ValueError("intercept_rate must be between 0.0 and 1.0")
+    if any(not 0.0 <= x <= 1.0 for x in (intercept_rate, bit_flip_rate, phase_flip_rate, loss_rate)):
+        raise ValueError("attack/noise/loss rates must be between 0 and 1")
 
     if verbose:
         print("\n" + "=" * 60)
@@ -39,13 +44,14 @@ def run_e91(
         print("=" * 60)
 
     angles = E91Angles()
-    rng = make_rng()
+    rng = make_rng(seed)
 
     key_alice: list[int] = []
     key_bob: list[int] = []
     correlations: dict[str, list[int]] = {"a0b0": [], "a0b1": [], "a1b0": [], "a1b1": []}
     bell_rounds = 0
     eve_events = 0
+    lost_pairs = 0
 
     if verbose:
         print("[1/7] Preparing Bell pairs with Qiskit.")
@@ -57,6 +63,18 @@ def run_e91(
             eve_angle = float(rng.choice([angles.key, angles.a1]))
             _, state = measure_qubit_at_angle(state, 1, eve_angle)
             eve_events += 1
+
+        if rng.random() < loss_rate:
+            lost_pairs += 1
+            continue
+        if rng.random() < bit_flip_rate:
+            qc_noise = QuantumCircuit(2)
+            qc_noise.x(int(rng.integers(0, 2)))
+            state = state.evolve(qc_noise)
+        if rng.random() < phase_flip_rate:
+            qc_noise = QuantumCircuit(2)
+            qc_noise.z(int(rng.integers(0, 2)))
+            state = state.evolve(qc_noise)
 
         alice_mode = str(rng.choice(["key", "a0", "a1"]))
         bob_mode = str(rng.choice(["key", "b0", "b1"]))
@@ -108,7 +126,8 @@ def run_e91(
     if verbose:
         print(f"[3/7] Key-generation rounds retained: {sifted_len} bits ({sifted_len / n_pairs:.1%}).")
 
-    qber, alice_remaining, bob_remaining = estimate_qber(alice_sifted, bob_sifted)
+    qber, alice_remaining, bob_remaining, test_bits = estimate_qber(alice_sifted, bob_sifted, seed=None if seed is None else seed + 1)
+    qber_upper = wilson_upper_bound(int(round(qber * test_bits)), test_bits)
     if verbose:
         print(f"[4/7] Estimated key-round QBER: {qber:.2%}")
 
@@ -123,21 +142,30 @@ def run_e91(
 
     metrics = {
         "n_pairs": n_pairs,
+        "sent_pairs": n_pairs,
+        "detected_pairs": n_pairs - lost_pairs,
+        "lost_pairs": lost_pairs,
+        "bit_flip_rate": bit_flip_rate,
+        "phase_flip_rate": phase_flip_rate,
+        "loss_rate": loss_rate,
         "eve_present": eve_present,
         "intercept_rate": intercept_rate,
         "bell_test_rounds": bell_rounds,
         "eve_intercepted_pairs": eve_events,
+        "key_security_status": "educational_simulation_no_finite_key_proof",
         "sifted_bits": sifted_len,
         "sifted_ratio": sifted_len / n_pairs,
         "qber": qber,
+        "qber_upper_99.9999": qber_upper,
+        "qber_test_bits": test_bits,
         "chsh_s": chsh_s,
-        "aborted": qber > QBER_THRESHOLD or chsh_s < CHSH_THRESHOLD,
+        "aborted": qber_upper > QBER_THRESHOLD or chsh_s < CHSH_THRESHOLD,
     }
 
-    if qber > QBER_THRESHOLD:
+    if qber_upper > QBER_THRESHOLD:
         metrics["abort_reason"] = "qber_threshold"
         if verbose:
-            print(f"[ABORT] QBER {qber:.2%} exceeds threshold {QBER_THRESHOLD:.2%}.")
+            print(f"[ABORT] QBER upper bound {qber_upper:.2%} exceeds threshold {QBER_THRESHOLD:.2%}.")
         return (None, metrics) if return_metrics else None
 
     if chsh_s < CHSH_THRESHOLD:
@@ -146,20 +174,33 @@ def run_e91(
             print(f"[ABORT] Bell score {chsh_s:.3f} is below threshold {CHSH_THRESHOLD:.2f}.")
         return (None, metrics) if return_metrics else None
 
-    if len(alice_remaining) < key_bits:
-        metrics["aborted"] = True
-        metrics["abort_reason"] = "insufficient_key_bits"
-        if verbose:
-            print(f"[ABORT] Only {len(alice_remaining)} remaining bits for a {key_bits}-bit key.")
-        return (None, metrics) if return_metrics else None
-
-    bob_corrected = cascade_reconciliation(alice_remaining, bob_remaining)
+    bob_corrected, leakage_bits, reconciled = parity_reconciliation(
+        alice_remaining, bob_remaining, seed=None if seed is None else seed + 2
+    )
     post_error_rate = float(np.mean(alice_remaining != bob_corrected)) if len(alice_remaining) else 0.0
     metrics["post_reconciliation_error_rate"] = post_error_rate
+    metrics["reconciliation_leakage_bits"] = leakage_bits
+    metrics["reconciliation_success"] = reconciled
     if verbose:
         print(f"[6/7] Post-reconciliation error rate: {post_error_rate:.4%}")
 
-    final_key = privacy_amplification(bob_corrected, output_bits=key_bits, seed=b"e91-aes-v1")
+    # Conservative BB84-style entropy expression used as a heuristic only;
+    # E91 security requires an E91-specific finite-key proof and Bell bounds.
+    q = min(qber_upper, 0.5 - 1e-12)
+    h2 = -q * np.log2(q) - (1 - q) * np.log2(1 - q) if q > 0 else 0.0
+    estimated_secret_bits = max(0.0, len(bob_corrected) * (1.0 - 2.0 * h2) - leakage_bits)
+    metrics["estimated_secret_bits"] = estimated_secret_bits
+    metrics["security_model"] = "heuristic_not_validated_for_e91_or_composable"
+    if not reconciled or estimated_secret_bits < key_bits:
+        metrics["aborted"] = True
+        metrics["abort_reason"] = "reconciliation_failed_or_insufficient_secret_bits"
+        if verbose:
+            print(f"[ABORT] Reconciliation agreement={reconciled}; estimated secret bits={estimated_secret_bits:.1f}.")
+        return (None, metrics) if return_metrics else None
+
+    final_key = privacy_amplification(
+        bob_corrected, output_bits=key_bits, seed=b"e91-aes-v2", estimated_secret_bits=estimated_secret_bits
+    )
     metrics["final_key_bits"] = key_bits
     if verbose:
         print("[7/7] Privacy amplification complete.")

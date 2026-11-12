@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from hybrid_encrypt import hybrid_decrypt, hybrid_encrypt, hybrid_encrypt_e91
 from qber_sweep import sweep_qber
+from rsa_hybrid import rsa_aes_decrypt, rsa_aes_encrypt
 
 MESSAGE = (
     "This message was encrypted using a key generated through "
@@ -13,6 +14,13 @@ MESSAGE = (
 
 def run_demo() -> None:
     """Run BB84/E91 demo scenarios and update the benchmark CSV."""
+    print("\n" + "=" * 60)
+    print("SCENARIO 0: RSA-OAEP + AES-GCM classical baseline")
+    print("=" * 60)
+    rsa_result = rsa_aes_encrypt(MESSAGE)
+    assert rsa_aes_decrypt(**{k: rsa_result[k] for k in ("ciphertext", "nonce", "aad", "wrapped_key", "private_key_pem")}) == MESSAGE
+    print("[PASS] RSA-wrapped AES key roundtrip succeeded.")
+
     print("\n" + "=" * 60)
     print("SCENARIO 1: Clean BB84 + AES channel")
     print("=" * 60)

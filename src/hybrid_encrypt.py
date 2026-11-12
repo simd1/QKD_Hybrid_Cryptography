@@ -5,6 +5,7 @@ from __future__ import annotations
 from aes_cipher import AESCipher
 from bb84_pipeline import run_bb84
 from e91_pipeline import run_e91
+from rsa_hybrid import rsa_aes_encrypt, rsa_aes_decrypt
 
 # An AAD is Additional Authenticated Data
 SESSION_AAD_BB84 = b"hybrid-bb84-aes-session-v2-qiskit"

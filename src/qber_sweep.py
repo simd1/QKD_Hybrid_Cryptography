@@ -1,198 +1,155 @@
-"""Generate comparative benchmark measurements for BB84+AES and E91+AES."""
+"""Reproducible trial-level comparison of RSA, BB84, and E91 key establishment."""
 
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass
+import json
+import math
+import platform
+import statistics
 from pathlib import Path
 from time import perf_counter
 
-from bb84_pipeline import QBER_THRESHOLD as BB84_QBER_THRESHOLD, run_bb84
-from e91_pipeline import CHSH_THRESHOLD as E91_CHSH_THRESHOLD, QBER_THRESHOLD as E91_QBER_THRESHOLD, run_e91
+import cryptography
+import qiskit
+
+from bb84_pipeline import run_bb84
+from e91_pipeline import run_e91
+from rsa_hybrid import rsa_aes_decrypt, rsa_trial
+
+DEFAULT_MESSAGE = "Common AES-GCM payload for key-establishment comparison."
 
 
-@dataclass(frozen=True)
-class ProtocolConfig:
-    """Configuration for one benchmarked protocol."""
-
-    name: str
-    quantum_units: int
-    quantum_unit_label: str
-    key_bits: int
-
-
-BB84_CONFIG = ProtocolConfig(
-    name="BB84+AES",
-    quantum_units=2048,
-    quantum_unit_label="qubits",
-    key_bits=256,
-)
-
-E91_CONFIG = ProtocolConfig(
-    name="E91+AES",
-    quantum_units=4096,
-    quantum_unit_label="entangled_pairs",
-    key_bits=256,
-)
+def _mean_ci(values: list[float]) -> tuple[float, float, float]:
+    mean = statistics.mean(values)
+    if len(values) < 2:
+        return mean, mean, mean
+    # Approximate 95% CI; use normal critical value for a compact dependency-free report.
+    margin = 1.96 * statistics.stdev(values) / math.sqrt(len(values))
+    return mean, mean - margin, mean + margin
 
 
-def _benchmark_bb84(rate: float, config: ProtocolConfig) -> tuple[bytes | None, dict[str, float | int | bool | str]]:
-    """Run one BB84 benchmark trial."""
-    return run_bb84(
-        n_qubits=config.quantum_units,
-        eve_present=rate > 0.0,
-        intercept_rate=rate,
-        key_bits=config.key_bits,
-        verbose=False,
-        return_metrics=True,
-    )
+def run_comparison(
+    trials: int = 30,
+    seed: int = 20261112,
+    message: str = DEFAULT_MESSAGE,
+    bb84_qubits: int = 4096,
+    e91_pairs: int = 8192,
+    intercept_rate: float = 0.0,
+    bit_flip_rate: float = 0.0,
+    phase_flip_rate: float = 0.0,
+    loss_rate: float = 0.0,
+    output_dir: Path | None = None,
+) -> tuple[Path, Path]:
+    """Run all methods and save raw trial data plus aggregate CSV summaries.
 
+    Runtime measures this Python implementation and local simulator only; it is
+    not a QKD link throughput or real-hardware latency estimate.
+    """
+    if trials <= 0:
+        raise ValueError("trials must be positive")
+    if not 0 <= intercept_rate <= 1:
+        raise ValueError("intercept_rate must be between 0 and 1")
+    output_dir = output_dir or Path(__file__).resolve().parents[1] / "results"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    raw_path = output_dir / "comparison_trials.csv"
+    summary_path = output_dir / "comparison_summary.csv"
+    rows: list[dict[str, object]] = []
 
-def _benchmark_e91(rate: float, config: ProtocolConfig) -> tuple[bytes | None, dict[str, float | int | bool | str]]:
-    """Run one E91 benchmark trial."""
-    return run_e91(
-        n_pairs=config.quantum_units,
-        eve_present=rate > 0.0,
-        intercept_rate=rate,
-        key_bits=config.key_bits,
-        verbose=False,
-        return_metrics=True,
-    )
+    for trial in range(trials):
+        trial_seed = seed + trial * 100
+        # RSA creates a fresh ephemeral keypair per trial; key generation is included in timing.
+        start = perf_counter()
+        rsa_result = rsa_trial(message)
+        rsa_elapsed = perf_counter() - start
+        rsa_ok = rsa_aes_decrypt(**{k: rsa_result[k] for k in ("ciphertext", "nonce", "aad", "wrapped_key", "private_key_pem")}) == message
+        rows.append({"trial": trial, "seed": trial_seed, "protocol": "RSA+AES-GCM", "runtime_sec": rsa_elapsed,
+                     "rsa_keygen_sec": rsa_result["keygen_sec"], "rsa_operation_sec": rsa_result["operation_sec"],
+                     "success": int(rsa_ok), "aborted": 0, "qber": "", "chsh_s": "",
+                     "quantum_units": 0, "intercept_rate": "", "key_bits": 256})
 
-
-def _write_protocol_rows(
-    writer: csv.DictWriter,
-    protocol: ProtocolConfig,
-    rates: list[float],
-    trials: int,
-) -> None:
-    """Run one protocol over all intercept rates and write aggregate rows."""
-    runner = _benchmark_bb84 if protocol.name == "BB84+AES" else _benchmark_e91
-
-    for rate in rates:
-        runtimes: list[float] = []
-        qbers: list[float] = []
-        sifted_ratios: list[float] = []
-        bell_scores: list[float] = []
-        post_errors: list[float] = []
-        eve_intercepts: list[float] = []
-        aborted = 0
-        successful_trials = 0
-
-        for _ in range(trials):
+        for name, runner, units, unit_name in (
+            ("BB84+AES-GCM", run_bb84, bb84_qubits, "n_qubits"),
+            ("E91+AES-GCM", run_e91, e91_pairs, "n_pairs"),
+        ):
             start = perf_counter()
-            key, metrics = runner(rate, protocol)
+            if name.startswith("BB84"):
+                key, metrics = runner(n_qubits=units, eve_present=intercept_rate > 0,
+                                      intercept_rate=intercept_rate, verbose=False,
+                                      return_metrics=True, seed=trial_seed, bit_flip_rate=bit_flip_rate,
+                                      phase_flip_rate=phase_flip_rate, loss_rate=loss_rate)
+            else:
+                key, metrics = runner(n_pairs=units, eve_present=intercept_rate > 0,
+                                      intercept_rate=intercept_rate, verbose=False,
+                                      return_metrics=True, seed=trial_seed, bit_flip_rate=bit_flip_rate,
+                                      phase_flip_rate=phase_flip_rate, loss_rate=loss_rate)
             elapsed = perf_counter() - start
+            rows.append({"trial": trial, "seed": trial_seed, "protocol": name, "runtime_sec": elapsed,
+                         "success": int(key is not None), "aborted": int(bool(metrics["aborted"])),
+                         "qber": metrics.get("qber", ""), "chsh_s": metrics.get("chsh_s", ""),
+                         "quantum_units": units, "unit_type": unit_name, "intercept_rate": intercept_rate,
+                         "key_bits": 256, "key_security_status": metrics.get("key_security_status", "")})
 
-            runtimes.append(elapsed)
-            qbers.append(float(metrics["qber"]))
-            sifted_ratios.append(float(metrics["sifted_ratio"]))
-            bell_scores.append(float(metrics.get("chsh_s", 0.0)))
-            post_errors.append(float(metrics.get("post_reconciliation_error_rate", 0.0)))
-            eve_intercepts.append(
-                float(
-                    metrics.get(
-                        "eve_intercepted_qubits",
-                        metrics.get("eve_intercepted_pairs", 0),
-                    )
-                )
-            )
-
-            if bool(metrics["aborted"]):
-                aborted += 1
-            if key is not None:
-                successful_trials += 1
-
-        avg_runtime = sum(runtimes) / len(runtimes)
-        avg_qber = sum(qbers) / len(qbers)
-        avg_sifted_ratio = sum(sifted_ratios) / len(sifted_ratios)
-        avg_bell_score = sum(bell_scores) / len(bell_scores)
-        avg_post_error = sum(post_errors) / len(post_errors)
-        avg_eve_intercepts = sum(eve_intercepts) / len(eve_intercepts)
-        success_rate = successful_trials / trials
-        efficiency_key_bits_per_quantum_unit = (protocol.key_bits * success_rate) / protocol.quantum_units
-        efficiency_key_bits_per_second = (protocol.key_bits * success_rate) / avg_runtime if avg_runtime > 0 else 0.0
-        computational_load_ms_per_quantum_unit = (avg_runtime * 1000.0) / protocol.quantum_units
-
-        writer.writerow(
-            {
-                "protocol": protocol.name,
-                "intercept_rate": f"{rate:.1f}",
-                "trials": trials,
-                "quantum_units_per_trial": protocol.quantum_units,
-                "quantum_unit_label": protocol.quantum_unit_label,
-                "avg_runtime_sec": f"{avg_runtime:.6f}",
-                "computational_load_ms_per_quantum_unit": f"{computational_load_ms_per_quantum_unit:.6f}",
-                "avg_qber": f"{avg_qber:.6f}",
-                "avg_sifted_ratio": f"{avg_sifted_ratio:.6f}",
-                "avg_bell_score": f"{avg_bell_score:.6f}",
-                "avg_post_reconciliation_error": f"{avg_post_error:.6f}",
-                "avg_eve_intercepts": f"{avg_eve_intercepts:.2f}",
-                "aborted_trials": aborted,
-                "successful_trials": successful_trials,
-                "success_rate": f"{success_rate:.6f}",
-                "efficiency_key_bits_per_quantum_unit": f"{efficiency_key_bits_per_quantum_unit:.6f}",
-                "efficiency_key_bits_per_second": f"{efficiency_key_bits_per_second:.6f}",
-                "qber_abort_threshold": (
-                    f"{BB84_QBER_THRESHOLD:.2f}" if protocol.name == "BB84+AES" else f"{E91_QBER_THRESHOLD:.2f}"
-                ),
-                "bell_abort_threshold": (
-                    "" if protocol.name == "BB84+AES" else f"{E91_CHSH_THRESHOLD:.2f}"
-                ),
-            }
-        )
-
-
-def sweep_qber(
-    trials: int = 3,
-    output_path: Path | None = None,
-) -> Path:
-    """Run a comparative protocol sweep and write aggregate metrics to CSV."""
-    if output_path is None:
-        output_path = Path(__file__).resolve().parents[1] / "results" / "qber_sweep.csv"
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    rates = [i / 10 for i in range(11)]
-
-    target_path = output_path
-    try:
-        handle = target_path.open("w", newline="", encoding="utf-8")
-    except PermissionError:
-        target_path = output_path.with_name(output_path.stem + "_pending_update.csv")
-        handle = target_path.open("w", newline="", encoding="utf-8")
-
-    with handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=[
-                "protocol",
-                "intercept_rate",
-                "trials",
-                "quantum_units_per_trial",
-                "quantum_unit_label",
-                "avg_runtime_sec",
-                "computational_load_ms_per_quantum_unit",
-                "avg_qber",
-                "avg_sifted_ratio",
-                "avg_bell_score",
-                "avg_post_reconciliation_error",
-                "avg_eve_intercepts",
-                "aborted_trials",
-                "successful_trials",
-                "success_rate",
-                "efficiency_key_bits_per_quantum_unit",
-                "efficiency_key_bits_per_second",
-                "qber_abort_threshold",
-                "bell_abort_threshold",
-            ],
-        )
+    raw_fields = sorted({key for row in rows for key in row})
+    with raw_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=raw_fields)
         writer.writeheader()
-        _write_protocol_rows(writer, BB84_CONFIG, rates, trials)
-        _write_protocol_rows(writer, E91_CONFIG, rates, trials)
+        writer.writerows(rows)
 
-    return target_path
+    with summary_path.open("w", newline="", encoding="utf-8") as f:
+        fields = ["protocol", "trials", "mean_runtime_sec", "runtime_ci95_low", "runtime_ci95_high",
+                  "success_rate", "success_rate_ci95_low", "success_rate_ci95_high", "mean_qber",
+                  "mean_chsh_s", "mean_quantum_units", "intercept_rate", "seed", "python_version",
+                  "qiskit_version", "cryptography_version", "bit_flip_rate", "phase_flip_rate", "loss_rate"]
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        for protocol in ("RSA+AES-GCM", "BB84+AES-GCM", "E91+AES-GCM"):
+            group = [r for r in rows if r["protocol"] == protocol]
+            runtimes = [float(r["runtime_sec"]) for r in group]
+            successes = [float(r["success"]) for r in group]
+            runtime_stats = _mean_ci(runtimes)
+            success_stats = _mean_ci(successes)
+            qbers = [float(r["qber"]) for r in group if r["qber"] != ""]
+            chsh = [float(r["chsh_s"]) for r in group if r["chsh_s"] != ""]
+            quantum_units = [float(r["quantum_units"]) for r in group]
+            writer.writerow({"protocol": protocol, "trials": trials, "mean_runtime_sec": runtime_stats[0],
+                             "runtime_ci95_low": runtime_stats[1], "runtime_ci95_high": runtime_stats[2],
+                             "success_rate": success_stats[0], "success_rate_ci95_low": success_stats[1],
+                             "success_rate_ci95_high": success_stats[2],
+                             "mean_qber": statistics.mean(qbers) if qbers else "",
+                             "mean_chsh_s": statistics.mean(chsh) if chsh else "",
+                             "mean_quantum_units": statistics.mean(quantum_units),
+                             "intercept_rate": "" if protocol.startswith("RSA") else intercept_rate,
+                             "seed": seed, "python_version": platform.python_version(),
+                             "qiskit_version": qiskit.__version__, "cryptography_version": cryptography.__version__})
+    return raw_path, summary_path
+
+
+def sweep_qber(trials: int = 3, output_path: Path | None = None) -> Path:
+    """Backward-compatible BB84/E91 intercept sweep with explicit seeds."""
+    output_path = output_path or Path(__file__).resolve().parents[1] / "results" / "qber_sweep.csv"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fields = ["protocol", "intercept_rate", "trials", "mean_qber", "success_rate", "mean_chsh_s", "seed"]
+    with output_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        for protocol, runner, param, units in (("BB84+AES", run_bb84, "n_qubits", 2048), ("E91+AES", run_e91, "n_pairs", 4096)):
+            for rate_i in range(11):
+                rate = rate_i / 10
+                metrics_rows = []
+                for trial in range(trials):
+                    kwargs = {param: units, "eve_present": rate > 0, "intercept_rate": rate,
+                              "verbose": False, "return_metrics": True, "seed": 70000 + rate_i * 100 + trial}
+                    _, metrics = runner(**kwargs)
+                    metrics_rows.append(metrics)
+                writer.writerow({"protocol": protocol, "intercept_rate": rate, "trials": trials,
+                                 "mean_qber": statistics.mean(float(m["qber"]) for m in metrics_rows),
+                                 "success_rate": sum(not bool(m["aborted"]) for m in metrics_rows) / trials,
+                                 "mean_chsh_s": statistics.mean(float(m.get("chsh_s", 0.0)) for m in metrics_rows),
+                                 "seed": 70000})
+    return output_path
 
 
 if __name__ == "__main__":
-    path = sweep_qber()
-    print(f"Wrote QKD comparison results to {path}")
+    raw, summary = run_comparison()
+    print(f"Wrote raw trials to {raw} and summary to {summary}")
